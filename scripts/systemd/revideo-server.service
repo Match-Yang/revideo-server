@@ -1,0 +1,31 @@
+[Unit]
+Description=Revideo Server - Video rendering, translation and republishing
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{GROUP}}
+WorkingDirectory={{INSTALL_DIR}}
+ExecStart={{NODE_BIN}} {{INSTALL_DIR}}/dist/server.js
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+Environment=NODE_ENV=production
+EnvironmentFile=-{{INSTALL_DIR}}/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{INSTALL_DIR}}/data {{INSTALL_DIR}}/public {{INSTALL_DIR}}/out
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=revideo-server
+
+[Install]
+WantedBy=multi-user.target

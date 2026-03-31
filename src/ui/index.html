@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Revideo 管理面板</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      --background: #f6f7f9;
+      --card: #ffffff;
+      --foreground: #111827;
+      --muted: #6b7280;
+      --muted-foreground: #4b5563;
+      --border: #e5e7eb;
+      --primary: #111827;
+      --primary-foreground: #ffffff;
+      --accent: #f3f4f6;
+      --ring: rgba(17, 24, 39, 0.14);
+      --success: #047857;
+      --info: #2563eb;
+      --warning: #b45309;
+      --error: #dc2626;
+    }
+
+    * { box-sizing: border-box; letter-spacing: 0; }
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--background);
+      color: var(--foreground);
+      font-feature-settings: "tnum";
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .app-shell { min-height: 100vh; display: grid; grid-template-columns: 264px minmax(0, 1fr); }
+    .sidebar {
+      border-right: 1px solid var(--border);
+      background: var(--card);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      padding: 18px 14px;
+      position: sticky;
+      top: 0;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; padding: 2px 8px 24px; }
+    .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: var(--primary); color: var(--primary-foreground); font-weight: 800; }
+    .brand-title { font-size: 17px; font-weight: 700; line-height: 1.2; }
+    .brand-subtitle { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .nav { display: grid; gap: 6px; }
+    .nav-section { margin: 18px 10px 8px; color: #9ca3af; font-size: 11px; font-weight: 750; text-transform: uppercase; }
+    .nav-item {
+      width: 100%;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted-foreground);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 40px;
+      padding: 0 10px;
+      text-align: left;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .nav-item:hover { background: var(--accent); color: var(--foreground); }
+    .nav-item.active { background: #111827; color: var(--primary-foreground); box-shadow: 0 8px 20px rgba(17, 24, 39, 0.12); }
+    .nav-icon { display: grid; place-items: center; width: 22px; height: 22px; color: inherit; font-size: 14px; }
+    .side-card { margin-top: auto; border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: #fafafa; }
+    .side-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+    .content { min-width: 0; }
+    .topbar {
+      align-items: center;
+      background: rgba(255, 255, 255, 0.86);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      height: 64px;
+      justify-content: space-between;
+      padding: 0 28px;
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      backdrop-filter: blur(12px);
+    }
+    .topbar-title { font-size: 14px; font-weight: 750; }
+    .topbar-subtitle { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .topbar-actions { display: flex; gap: 8px; align-items: center; }
+    .page { display: grid; gap: 18px; padding: 24px 28px 32px; }
+    .hidden { display: none !important; }
+    .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; padding: 2px 0 4px; }
+    .eyebrow { color: var(--muted); font-size: 12px; font-weight: 750; text-transform: uppercase; }
+    .page-title { margin: 5px 0 0; font-size: 28px; line-height: 1.2; font-weight: 780; }
+    .page-copy { margin: 6px 0 0; max-width: 720px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+    .card { min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 1px 2px rgba(17, 24, 39, 0.03); }
+    .card-body { padding: 18px; }
+    .card-title { margin: 0; font-size: 16px; font-weight: 700; }
+    .card-actions { display: flex; margin-top: 12px; }
+    .section-copy { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .btn {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--foreground);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 38px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .btn:hover { background: var(--accent); }
+    .btn-icon { width: 38px; padding: 0; }
+    .btn-sm { height: 32px; padding: 0 10px; font-size: 12px; }
+    .btn-primary { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+    .btn-primary:hover { background: #1e293b; }
+    .btn-error { border-color: #fecaca; background: #fef2f2; color: var(--error); }
+    .btn-outline { background: var(--card); }
+    .input, .select, .textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--foreground);
+      outline: none;
+      font-size: 14px;
+    }
+    .input, .select { height: 40px; padding: 0 12px; }
+    select[multiple].select { height: auto; min-height: 40px; padding: 6px 8px; }
+    .textarea { min-height: 96px; padding: 10px 12px; resize: vertical; }
+    .input:focus, .select:focus, .textarea:focus { border-color: #9ca3af; box-shadow: 0 0 0 3px var(--ring); }
+    .field-label, .label-text { display: block; margin-bottom: 7px; color: var(--muted-foreground); font-size: 13px; font-weight: 650; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #f9fafb;
+      color: #374151;
+      height: 24px;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .badge-success { border-color: #bbf7d0; background: #ecfdf5; color: var(--success); }
+    .badge-info { border-color: #bae6fd; background: #f0f9ff; color: var(--info); }
+    .badge-error { border-color: #fecaca; background: #fef2f2; color: var(--error); }
+    .badge-warning { border-color: #fde68a; background: #fffbeb; color: var(--warning); }
+    .badge-ghost { border-color: var(--border); background: #f9fafb; color: var(--muted-foreground); }
+    .overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .overview-card { cursor: pointer; transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease; }
+    .overview-card:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(17, 24, 39, 0.08); }
+    .overview-card.active { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+    .overview-card.active .btn { border-color: rgba(255,255,255,0.28); background: rgba(255,255,255,0.12); color: var(--primary-foreground); }
+    .overview-card.active .btn:hover { background: rgba(255,255,255,0.18); }
+    .metric-label { color: var(--muted); font-size: 13px; font-weight: 650; }
+    .overview-card.active .metric-label, .overview-card.active .metric-hint { color: rgba(255,255,255,0.72); }
+    .metric-value { margin-top: 12px; font-size: 38px; line-height: 1; font-weight: 780; }
+    .metric-hint { margin-top: 8px; color: var(--muted); font-size: 13px; }
+    .overview-lower { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; }
+    .soft-row, .empty-state {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #f9fafb;
+      padding: 14px;
+    }
+    .soft-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .empty-state { color: var(--muted); font-size: 13px; text-align: center; }
+    .queue-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .breakdown-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+    .command-card { border-color: #d1d5db; }
+    #createTaskPanel, .settings-layout section { scroll-margin-top: 84px; }
+    .create-form { display: grid; grid-template-columns: minmax(320px, 1fr) 128px 230px auto; gap: 10px; margin-top: 14px; }
+    .filter-bar { display: flex; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border); align-items: center; flex-wrap: wrap; background: #fafafa; border-radius: 10px 10px 0 0; }
+    .filter-bar > input { flex: 1; min-width: 180px; }
+    .filter-bar > select { width: 180px; flex-shrink: 0; }
+    .filter-bar > .btn { flex-shrink: 0; }
+    .progress-bar { display: flex; width: 100%; gap: 2px; align-items: center; }
+    .progress-segment { width: 7px; height: 26px; border-radius: 2px; background: #e5e7eb; flex-shrink: 0; }
+    .repeat-badge { font-size: 11px; color: var(--muted); white-space: nowrap; margin-left: 4px; font-weight: 600; }
+    .preview-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .jobs-table { table-layout: auto; }
+    .jobs-table th:nth-child(1), .jobs-table td:nth-child(1) { width: 60px; text-align: center; }
+    .jobs-table th:nth-child(2), .jobs-table td:nth-child(2) { width: 60px; white-space: nowrap; }
+    .jobs-table th:nth-child(3), .jobs-table td:nth-child(3) { width: 150px; min-width: 150px; }
+    .jobs-table th:nth-child(4), .jobs-table td:nth-child(4) { overflow: hidden; }
+    .jobs-table th:nth-child(5), .jobs-table td:nth-child(5) { width: 60px; text-align: center; }
+    .jobs-table td, .jobs-table th { padding-left: 10px; padding-right: 10px; }
+    .jobs-table td:first-child, .jobs-table th:first-child { padding-left: 14px; }
+    .jobs-table td:last-child, .jobs-table th:last-child { padding-right: 14px; }
+    .preview-btn { margin-left: auto; }
+    .seg-done { background: var(--success); }
+    .seg-current { background: var(--warning); }
+    .seg-error { background: var(--error); }
+    .task-layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
+    .detail-panel { position: sticky; top: 82px; max-height: calc(100vh - 104px); overflow: auto; }
+    .detail-summary { border: 1px solid var(--border); border-radius: 10px; background: #f9fafb; padding: 16px; }
+    .detail-id { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; }
+    .detail-title { margin: 7px 0 0; font-size: 17px; line-height: 1.35; font-weight: 750; }
+    .detail-subtitle { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+    .detail-metrics { display: grid; gap: 10px; margin-top: 14px; }
+    .info-tile { border: 1px solid var(--border); border-radius: 8px; background: #ffffff; padding: 12px; }
+    .info-label { color: var(--muted); font-size: 12px; font-weight: 650; }
+    .info-value { margin-top: 8px; font-size: 13px; line-height: 1.55; }
+    .flow-list { display: grid; gap: 10px; margin-top: 14px; }
+    .flow-item { border: 1px solid var(--border); border-radius: 8px; background: #ffffff; overflow: hidden; }
+    .flow-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; padding: 12px; font-size: 14px; font-weight: 700; }
+    .flow-content { border-top: 1px solid var(--border); padding: 12px; }
+    .detail-dl { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px 12px; margin: 0; font-size: 13px; }
+    .detail-dl dt { color: var(--muted); font-weight: 650; }
+    .detail-dl dd { margin: 0; min-width: 0; }
+    .detail-stack { display: grid; gap: 8px; }
+    .table-wrap { max-width: 100%; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+    th { height: 42px; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--muted); text-align: left; font-weight: 650; background: #fafafa; }
+    td { height: 62px; padding: 0 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tbody tr[data-job-id] { cursor: pointer; }
+    tbody tr[data-job-id]:hover { background: #f9fafb; }
+    tr.selected { background: #f3f4f6; box-shadow: inset 3px 0 0 var(--primary); }
+    .dropdown { position: relative; }
+    .dropdown-content { display: none; position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; min-width: 240px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12); padding: 8px; }
+    .dropdown:focus-within .dropdown-content, .dropdown:hover .dropdown-content { display: block; }
+    .choice { display: flex; align-items: center; gap: 10px; border-radius: 8px; padding: 8px; font-size: 14px; cursor: pointer; }
+    .choice:hover { background: var(--accent); }
+    .choice input { accent-color: var(--primary); }
+    .stats { display: flex; gap: 8px; }
+    .stat { min-width: 112px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; padding: 10px 12px; }
+    .stat-title { color: var(--muted); font-size: 12px; }
+    .stat-value { margin-top: 3px; font-size: 22px; font-weight: 750; }
+    .settings-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .settings-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; align-items: start; }
+    .settings-rail { position: sticky; top: 82px; display: grid; gap: 8px; }
+    .settings-rail a { border-radius: 8px; color: var(--muted-foreground); padding: 10px 12px; text-decoration: none; font-size: 13px; font-weight: 650; }
+    .settings-rail a:hover { background: var(--accent); color: var(--foreground); }
+    .tabs { display: grid; gap: 12px; }
+    .tab-content { border: 1px solid var(--border); border-radius: 10px; padding: 16px; background: #fafafa; }
+    .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 80; }
+    .alert { border-radius: 10px; background: var(--primary); color: var(--primary-foreground); padding: 10px 14px; font-size: 14px; }
+    .rounded-box { border-radius: 10px; }
+    .break-all { word-break: break-all; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .muted { color: var(--muted); }
+    .text-small { color: var(--muted); font-size: 12px; }
+    .browser-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+    .min-w-0 { min-width: 0; }
+    .mt-2 { margin-top: 8px; }
+    .space-y-3 > * + * { margin-top: 12px; }
+    .space-y-4 > * + * { margin-top: 16px; }
+    .gap-2 { gap: 8px; }
+    .gap-3 { gap: 12px; }
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+    .grid { display: grid; }
+    @media (max-width: 1279px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar { min-height: auto; position: static; }
+      .topbar { top: 0; padding: 0 18px; }
+      .overview-grid, .breakdown-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .overview-lower, .create-form, .browser-grid { grid-template-columns: 1fr; }
+      .filter-bar { flex-wrap: wrap; }
+      .filter-bar > select { width: 100%; }
+      .task-layout { grid-template-columns: 1fr; }
+      .detail-panel { position: static; max-height: none; }
+      .settings-grid, .two-col, .settings-layout { grid-template-columns: 1fr; }
+      .settings-rail { position: static; display: flex; overflow: auto; }
+    }
+    @media (max-width: 640px) {
+      .overview-grid, .breakdown-grid, .overview-lower, .create-form { grid-template-columns: 1fr; }
+      .filter-bar { flex-wrap: wrap; }
+      .filter-bar > select { width: 100%; }
+      .page { padding: 18px 14px 24px; }
+      .topbar { height: auto; min-height: 58px; flex-wrap: wrap; padding: 10px 14px; }
+      .page-header { align-items: flex-start; flex-direction: column; }
+      .page-header .flex { flex-wrap: wrap; gap: 12px; }
+      table { min-width: 584px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">R</div>
+        <div>
+          <div class="brand-title">Revideo</div>
+          <div id="updatedAt" class="brand-subtitle">等待刷新</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-section">Workspace</div>
+        <button class="nav-item" data-page="overview"><span class="nav-icon">⌂</span><span>纵览</span></button>
+        <button class="nav-item" data-page="tasks"><span class="nav-icon">□</span><span>任务工作台</span></button>
+        <div class="nav-section">System</div>
+        <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span><span>系统设置</span></button>
+      </nav>
+
+      <div class="side-card">
+        <div class="side-card-header">
+          <span>运行状态</span>
+          <span id="sidebarStatus" class="badge badge-ghost">同步中</span>
+        </div>
+      <div class="text-small">任务队列和浏览器状态每 6 秒同步。</div>
+      </div>
+
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <div id="topbarTitle" class="topbar-title">纵览</div>
+          <div id="topbarSubtitle" class="topbar-subtitle">Revideo 发布流水线</div>
+        </div>
+        <div class="topbar-actions">
+          <button id="topCreateTaskBtn" type="button" class="btn btn-primary">新建任务</button>
+          <button id="topRefreshBtn" type="button" class="btn btn-icon" title="刷新">↻</button>
+        </div>
+      </header>
+
+      <section class="page" data-view="overview">
+        <header class="page-header">
+          <div>
+            <div class="eyebrow">Overview</div>
+            <h2 class="page-title">系统纵览</h2>
+            <p class="page-copy">把注意力放在队列健康、失败任务和发布吞吐上。</p>
+          </div>
+        </header>
+
+        <section id="overviewCards" class="overview-grid"></section>
+        <section id="overviewBreakdown" class="card"></section>
+
+        <div class="overview-lower">
+          <section class="card">
+            <div class="card-body">
+              <h3 class="card-title">最近异常</h3>
+              <p class="section-copy">失败任务的最近步骤和更新时间。</p>
+              <div id="recentFailures" class="space-y-3" style="margin-top: 12px;"></div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="card-body">
+              <h3 class="card-title">发布队列摘要</h3>
+              <div id="queueSummary" class="space-y-3" style="margin-top: 12px;"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="page hidden" data-view="tasks">
+        <header class="page-header">
+          <div>
+            <div class="eyebrow">Tasks</div>
+            <h2 class="page-title">任务工作台</h2>
+            <p class="page-copy">视频来源、重复策略、发布目标和执行状态集中处理。</p>
+          </div>
+          <div class="stats">
+            <div class="stat"><div class="stat-title">任务数</div><div id="taskTotalStat" class="stat-value">-</div></div>
+            <div class="stat"><div class="stat-title">进行中</div><div id="taskRunningStat" class="stat-value">-</div></div>
+          </div>
+        </header>
+
+        <section id="createTaskPanel" class="card command-card">
+          <div class="card-body">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="card-title">创建新任务</h3>
+                <p class="section-copy">来源视频、重复次数和目标平台。</p>
+              </div>
+              <div id="createHint" class="section-copy"></div>
+            </div>
+            <form id="createJobForm" class="create-form">
+              <input id="sourceUrlInput" class="input" placeholder="粘贴视频 URL，自动识别平台">
+              <input id="repeatTimesInput" type="number" min="1" max="10" value="1" class="input" title="重复次数">
+              <div class="dropdown">
+                <button type="button" id="targetDropdownLabel" class="btn" style="width: 100%; justify-content: space-between;">目标平台</button>
+                <div class="dropdown-content">
+                  <div id="targetPlatformChoices"></div>
+                </div>
+              </div>
+              <button class="btn btn-primary" type="submit">创建任务</button>
+            </form>
+          </div>
+        </section>
+
+        <div class="task-layout">
+          <section class="card">
+            <div class="filter-bar">
+              <input id="jobSearch" class="input" placeholder="搜索标题、Job ID、原始链接">
+              <select id="jobStatusFilter" class="select"></select>
+              <button id="refreshJobsBtn" class="btn">刷新列表</button>
+              <button id="pauseAllBtn" class="btn btn-error" style="display:none">暂停全部</button>
+              <button id="resumeAllBtn" class="btn btn-primary" style="display:none">恢复全部</button>
+            </div>
+            <div class="table-wrap">
+              <table class="jobs-table">
+                <colgroup>
+                  <col style="width:60px">
+                  <col style="width:60px">
+                  <col style="width:60px">
+                  <col>
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>序号</th>
+                    <th>状态</th>
+                    <th>进度</th>
+                    <th>任务信息</th>
+                  </tr>
+                </thead>
+                <tbody id="jobsTable">
+                  <tr><td colspan="4" style="text-align:center;color:var(--muted);height:96px;">加载中</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside class="card detail-panel">
+            <div class="card-body">
+              <h3 class="card-title">任务详情</h3>
+              <p class="section-copy">流程、文件、批次和错误信息。</p>
+              <div id="jobDetail" style="margin-top: 14px;"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="page hidden" data-view="settings">
+        <header class="page-header">
+          <div>
+            <div class="eyebrow">Settings</div>
+            <h2 class="page-title">系统设置</h2>
+            <p class="page-copy">调整下载、翻译、发布和浏览器登录策略。</p>
+          </div>
+        </header>
+
+        <form id="settingsForm" class="settings-layout">
+          <nav class="settings-rail">
+            <a href="#settings-download">下载</a>
+            <a href="#settings-translation">翻译审核</a>
+            <a href="#settings-publishing">发布</a>
+            <a href="#settings-browser">浏览器</a>
+          </nav>
+
+          <div class="space-y-4">
+          <section id="settings-download" class="card">
+            <div class="card-body">
+              <h3 class="card-title">视频及信息下载设置</h3>
+              <div class="settings-grid" style="margin-top: 14px;">
+                <label><span class="field-label">默认横屏分辨率</span><input name="download.landscapeResolution" class="input" placeholder="1080p"></label>
+                <label><span class="field-label">默认竖屏分辨率</span><input name="download.portraitResolution" class="input" placeholder="1080p"></label>
+                <label><span class="field-label">每条评论持续时间</span><input name="download.commentSeconds" type="number" min="0.5" step="0.5" class="input" placeholder="2"></label>
+                <label><span class="field-label">评论数量上限</span><input name="download.maxComments" type="number" min="1" max="5000" class="input" placeholder="800"></label>
+              </div>
+            </div>
+          </section>
+
+          <section id="settings-translation" class="card">
+            <div class="card-body">
+              <h3 class="card-title">翻译与审核设置</h3>
+              <div class="two-col" style="margin-top: 14px;">
+                <label><span class="field-label">渲染评论</span><select name="production.renderComments" class="select"><option value="true">开启</option><option value="false">关闭</option></select></label>
+                <label><span class="field-label">目标语言</span><select name="translation.targetLanguage" class="select"></select></label>
+              </div>
+              <div class="two-col" style="margin-top: 14px;">
+                <label><span class="field-label">目标语言继续翻译</span><select name="translation.retranslateTargetLanguage" class="select"><option value="false">否</option><option value="true">是</option></select></label>
+              </div>
+              <div class="two-col" style="margin-top: 14px;">
+                <label><span class="field-label">双语字幕</span><select name="translation.bilingualSubtitles" class="select"><option value="false">关闭</option><option value="true">开启</option></select></label>
+              </div>
+              <div style="margin-top: 14px;">
+                <label><span class="field-label">字幕翻译提示词</span><textarea name="translation.subtitlePrompt" class="textarea" placeholder="保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。"></textarea></label>
+              </div>
+              <div style="margin-top: 14px;">
+                <label><span class="field-label">评论翻译提示词</span><textarea name="translation.commentPrompt" class="textarea" placeholder="将非中文评论翻译为自然中文；中文评论保持原文；保留用户语气但不要美化危险内容。"></textarea></label>
+              </div>
+            </div>
+          </section>
+
+          <section id="settings-publishing" class="card">
+            <div class="card-body">
+              <h3 class="card-title">视频发布设置</h3>
+              <div class="settings-grid" style="margin-top: 14px;">
+                <label><span class="field-label">发布时间逻辑</span><select name="publishing.scheduleMode" class="select"><option value="immediate">立即发布</option><option value="scheduled">定时发布</option></select></label>
+                <label><span class="field-label">定时延迟分钟</span><input name="publishing.scheduledDelayMinutes" type="number" min="0" max="10080" class="input"></label>
+                <label><span class="field-label">发布失败重试次数</span><input name="publishing.retryCount" type="number" min="0" max="10" class="input"></label>
+                <label><span class="field-label">智能封面</span><select name="publishing.smartCover" class="select"><option value="false">关闭</option><option value="true">开启</option></select></label>
+                <div><span class="field-label">默认发布平台</span><div id="defaultPlatformSettings" class="flex flex-wrap gap-3" style="margin-top:6px;"></div></div>
+              </div>
+              <div class="tab-content" style="margin-top: 16px;">
+                <h4 style="margin:0 0 12px;font-size:14px;font-weight:700;">B站</h4>
+                <div class="two-col">
+                  <label><span class="field-label">分区</span><input name="publishing.platformConfigs.bilibili.category" class="input" placeholder="汽车"></label>
+                  <label><span class="field-label">创作声明</span><input name="publishing.platformConfigs.bilibili.declaration" class="input" placeholder="转载"></label>
+                </div>
+                <div class="two-col" style="margin-top: 14px;">
+                  <label><span class="field-label">标签</span><input name="publishing.platformConfigs.bilibili.tags" class="input" placeholder="汽车,海外视频"></label>
+                  <label><span class="field-label">简介模板</span><textarea name="publishing.platformConfigs.bilibili.descriptionTemplate" class="textarea"></textarea></label>
+                </div>
+              </div>
+              <div class="tab-content" style="margin-top: 12px;">
+                <h4 style="margin:0 0 12px;font-size:14px;font-weight:700;">抖音</h4>
+                <div class="two-col">
+                  <label><span class="field-label">创作声明类型</span><input name="publishing.platformConfigs.douyin.declarationType" class="input" placeholder="转载"></label>
+                  <label><span class="field-label">可见性</span><input name="publishing.platformConfigs.douyin.visibility" class="input" placeholder="公开"></label>
+                </div>
+                <div class="two-col" style="margin-top: 14px;">
+                  <label><span class="field-label">话题</span><input name="publishing.platformConfigs.douyin.topics" class="input" placeholder="汽车 海外视频"></label>
+                  <label><span class="field-label">简介模板</span><textarea name="publishing.platformConfigs.douyin.descriptionTemplate" class="textarea"></textarea></label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="settings-browser" class="card">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h3 class="card-title">浏览器与登录状态</h3>
+                <button id="startBrowserBtn" type="button" class="btn">启动浏览器</button>
+              </div>
+              <div id="browserPanel" style="margin-top: 14px;"></div>
+            </div>
+          </section>
+
+          <div style="display:flex;justify-content:flex-end;">
+            <button class="btn btn-primary" type="submit">保存设置</button>
+          </div>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden">
+    <div class="alert"><span></span></div>
+  </div>
+
+  <script src="client.js"></script>
+</body>
+</html>

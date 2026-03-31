@@ -1,0 +1,41 @@
+{
+  "name": "revideo-server",
+  "version": "1.0.0",
+  "description": "Revideo Server",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "main": "dist/server.js",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "puppeteer": "^24.42.0",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/web": "0.0.166",
+    "concurrently": "^10.0.3",
+    "eslint": "9.19.0",
+    "prettier": "3.8.1",
+    "tsx": "^4.21.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.60.1"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev:restart": "scripts/dev.sh",
+    "dev": "npx concurrently -n \"api,ui\" -c \"blue,green\" \"tsx src/server.ts\" \"npm --prefix dashboard run dev\"",
+    "dashboard:install": "npm --prefix dashboard install",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "ui": "tsx src/server.ts",
+    "restart:ui": "scripts/restart-ui.sh",
+    "lint": "eslint src && tsc",
+    "test:moderation": "tsx scripts/moderation-smoke-test.ts",
+    "test:translation-batch": "tsx -r dotenv/config scripts/translation-batch-smoke-test.ts"
+  }
+}

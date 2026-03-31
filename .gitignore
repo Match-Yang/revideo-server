@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Release archives
+revideo-*.tar.gz
+revideo-*.zip
+
+# Public (runtime populated by render - contains source video, subtitles, comments)
+public/
+
+# Rendered output
+out/
+
+# Runtime workflow data
+data/browser/
+data/jobs/
+data/events.jsonl
+data/settings.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Remotion cache
+.remotion/
