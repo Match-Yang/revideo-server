@@ -12,30 +12,36 @@
       color: #e0e0e0;
       min-height: 100vh;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
+      padding: 32px 0;
     }
-    .container {
-      width: 480px;
+
+    /* Left panel - controls */
+    .left-panel {
+      width: 280px;
+      flex-shrink: 0;
       background: #1a1a1a;
-      border-radius: 12px;
-      padding: 32px;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      align-self: flex-start;
     }
     h1 {
-      font-size: 20px;
-      margin-bottom: 24px;
+      font-size: 18px;
+      margin-bottom: 28px;
       color: #fff;
     }
     label {
       display: block;
-      font-size: 14px;
+      font-size: 13px;
       color: #999;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     select {
       width: 100%;
-      padding: 12px 16px;
-      font-size: 15px;
+      padding: 10px 14px;
+      font-size: 14px;
       background: #2a2a2a;
       color: #fff;
       border: 1px solid #444;
@@ -46,15 +52,15 @@
     }
     select:focus { border-color: #666; }
     .info {
-      margin-top: 8px;
-      font-size: 13px;
+      margin-top: 6px;
+      font-size: 12px;
       color: #777;
     }
-    button {
+    .render-btn {
       width: 100%;
-      margin-top: 24px;
-      padding: 14px;
-      font-size: 16px;
+      margin-top: 20px;
+      padding: 12px;
+      font-size: 15px;
       font-weight: 600;
       border: none;
       border-radius: 8px;
@@ -63,34 +69,114 @@
       color: #fff;
       transition: background 0.2s;
     }
-    button:hover:not(:disabled) { background: #3a8eef; }
-    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    .render-btn:hover:not(:disabled) { background: #3a8eef; }
+    .render-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
     .status {
-      margin-top: 16px;
-      padding: 12px 16px;
+      margin-top: 14px;
+      padding: 10px 14px;
       border-radius: 8px;
-      font-size: 14px;
+      font-size: 13px;
       display: none;
     }
     .status.rendering { display: block; background: #1a2a1a; color: #6f6; }
     .status.success { display: block; background: #1a2a1a; color: #6f6; }
     .status.error { display: block; background: #2a1a1a; color: #f66; }
     .empty { text-align: center; color: #666; padding: 40px 0; }
+    .no-dirs {
+      text-align: center;
+      color: #666;
+      padding: 60px 0;
+    }
+
+    /* Right panel - preview */
+    .right-panel {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+      background: #1a1a1a;
+      padding: 24px;
+      align-self: flex-start;
+    }
+    .preview-placeholder {
+      color: #444;
+      font-size: 15px;
+      text-align: center;
+    }
+    .preview-section {
+      width: auto;
+      display: none;
+    }
+    .preview-section.visible { display: block; }
+    .preview-tabs {
+      display: flex;
+    }
+    .preview-tab {
+      flex: 1;
+      padding: 9px;
+      font-size: 13px;
+      font-weight: 600;
+      background: #222;
+      color: #888;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+      width: auto;
+      margin-top: 0;
+      border-radius: 0;
+    }
+    .preview-tab:first-child { border-radius: 8px 0 0 0; }
+    .preview-tab:last-child { border-radius: 0 8px 0 0; }
+    .preview-tab.active { background: #333; color: #fff; }
+    .preview-wrap {
+      background: #000;
+      border-radius: 0 0 8px 8px;
+      overflow: hidden;
+    }
+    .preview-wrap video {
+      height: auto;
+      max-height: calc(100vh - 100px);
+      max-width: 80vh;
+      display: block;
+    }
+    .preview-empty {
+      text-align: center;
+      padding: 60px 16px;
+      color: #555;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <!-- Left: Controls -->
+  <div class="left-panel">
     <h1>视频渲染</h1>
     <div id="loading" class="empty">加载中...</div>
     <div id="main" style="display:none">
       <label>选择视频文件夹</label>
       <select id="dirSelect"></select>
       <div id="dirInfo" class="info"></div>
-      <button id="renderBtn" disabled>开始渲染</button>
+      <button id="renderBtn" class="render-btn" disabled>开始渲染</button>
       <div id="status" class="status"></div>
     </div>
-    <div id="noDirs" class="empty" style="display:none">
+    <div id="noDirs" class="no-dirs" style="display:none">
       ~/Movies 下没有找到包含视频的文件夹
+    </div>
+  </div>
+
+  <!-- Right: Preview -->
+  <div class="right-panel">
+    <div id="previewPlaceholder" class="preview-placeholder">选择一个文件夹以预览</div>
+    <div id="previewSection" class="preview-section">
+      <div class="preview-tabs">
+        <button class="preview-tab active" data-tab="rendered">渲染结果</button>
+        <button class="preview-tab" data-tab="source">源视频</button>
+      </div>
+      <div class="preview-wrap">
+        <video id="previewVideo" controls playsinline></video>
+        <div id="previewEmpty" class="preview-empty" style="display:none">暂无渲染结果，请先渲染</div>
+      </div>
     </div>
   </div>
 

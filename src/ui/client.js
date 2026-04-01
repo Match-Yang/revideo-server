@@ -5,8 +5,54 @@ const status = document.getElementById("status");
 const loading = document.getElementById("loading");
 const main = document.getElementById("main");
 const noDirs = document.getElementById("noDirs");
+const previewSection = document.getElementById("previewSection");
+const previewPlaceholder = document.getElementById("previewPlaceholder");
+const previewVideo = document.getElementById("previewVideo");
+const previewEmpty = document.getElementById("previewEmpty");
+const tabs = document.querySelectorAll(".preview-tab");
 
 let dirs = [];
+let currentTab = "source";
+let currentDirName = "";
+
+function setPreviewSrc(src) {
+  previewVideo.style.display = "";
+  previewEmpty.style.display = "none";
+  previewVideo.src = src;
+}
+
+function showPreviewEmpty(msg) {
+  previewVideo.style.display = "none";
+  previewEmpty.style.display = "";
+  previewEmpty.textContent = msg;
+}
+
+function updatePreview() {
+  if (!currentDirName) return;
+  if (currentTab === "source") {
+    setPreviewSrc(`/api/preview/${encodeURIComponent(currentDirName)}`);
+  } else {
+    const outputPath = `/out/${encodeURIComponent(currentDirName)}.mp4`;
+    fetch(outputPath, { method: "HEAD" }).then((r) => {
+      if (r.ok) {
+        setPreviewSrc(outputPath);
+      } else {
+        showPreviewEmpty("暂无渲染结果，请先渲染");
+      }
+    }).catch(() => {
+      showPreviewEmpty("暂无渲染结果，请先渲染");
+    });
+  }
+}
+
+tabs.forEach((tab) => {
+  tab.addEventListener("click", () => {
+    tabs.forEach((t) => t.classList.remove("active"));
+    tab.classList.add("active");
+    currentTab = tab.dataset.tab;
+    updatePreview();
+  });
+});
 
 async function loadDirs() {
   try {
@@ -31,6 +77,7 @@ async function loadDirs() {
 
     renderBtn.disabled = false;
     updateInfo();
+    onDirChange();
   } catch (err) {
     loading.textContent = "加载失败: " + err.message;
   }
@@ -45,7 +92,26 @@ function updateInfo() {
   dirInfo.textContent = tags.length ? tags.join(" / ") : "无附加数据";
 }
 
-dirSelect.addEventListener("change", updateInfo);
+function onDirChange() {
+  currentDirName = dirSelect.value;
+  currentTab = "rendered";
+  tabs.forEach((t) => {
+    t.classList.toggle("active", t.dataset.tab === "rendered");
+  });
+  if (currentDirName) {
+    previewPlaceholder.style.display = "none";
+    previewSection.classList.add("visible");
+    updatePreview();
+  } else {
+    previewPlaceholder.style.display = "";
+    previewSection.classList.remove("visible");
+  }
+}
+
+dirSelect.addEventListener("change", () => {
+  updateInfo();
+  onDirChange();
+});
 
 renderBtn.addEventListener("click", async () => {
   const dirName = dirSelect.value;
@@ -64,6 +130,12 @@ renderBtn.addEventListener("click", async () => {
     if (data.success) {
       status.className = "status success";
       status.textContent = `渲染完成: ${data.output} (${data.durationSec.toFixed(1)}秒)`;
+      // Auto switch to rendered tab
+      currentTab = "rendered";
+      tabs.forEach((t) => {
+        t.classList.toggle("active", t.dataset.tab === "rendered");
+      });
+      updatePreview();
     } else {
       status.className = "status error";
       status.textContent = "渲染失败: " + (data.error || "未知错误");
