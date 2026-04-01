@@ -17,6 +17,7 @@ export const videoCommentsSchema = z.object({
   videoFile: z.string(),
   commentFile: z.string(),
   subtitleFiles: z.array(z.string()),
+  durationInFrames: z.number().optional(),
 });
 
 export type VideoCommentsProps = z.infer<typeof videoCommentsSchema>;
