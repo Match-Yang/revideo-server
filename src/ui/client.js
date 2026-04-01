@@ -8,21 +8,33 @@ const noDirs = document.getElementById("noDirs");
 const previewSection = document.getElementById("previewSection");
 const previewPlaceholder = document.getElementById("previewPlaceholder");
 const previewVideo = document.getElementById("previewVideo");
+const previewIframe = document.getElementById("previewIframe");
 const previewEmpty = document.getElementById("previewEmpty");
 const tabs = document.querySelectorAll(".preview-tab");
 
+const STUDIO_URL = "http://localhost:3000";
+
 let dirs = [];
-let currentTab = "source";
+let currentTab = "preview";
 let currentDirName = "";
 
 function setPreviewSrc(src) {
   previewVideo.style.display = "";
+  previewIframe.style.display = "none";
   previewEmpty.style.display = "none";
   previewVideo.src = src;
 }
 
+function showStudioPreview() {
+  previewIframe.style.display = "";
+  previewVideo.style.display = "none";
+  previewEmpty.style.display = "none";
+  previewIframe.src = STUDIO_URL;
+}
+
 function showPreviewEmpty(msg) {
   previewVideo.style.display = "none";
+  previewIframe.style.display = "none";
   previewEmpty.style.display = "";
   previewEmpty.textContent = msg;
 }
@@ -32,16 +44,7 @@ function updatePreview() {
   if (currentTab === "source") {
     setPreviewSrc(`/api/preview/${encodeURIComponent(currentDirName)}`);
   } else {
-    const outputPath = `/out/${encodeURIComponent(currentDirName)}.mp4`;
-    fetch(outputPath, { method: "HEAD" }).then((r) => {
-      if (r.ok) {
-        setPreviewSrc(outputPath);
-      } else {
-        showPreviewEmpty("暂无渲染结果，请先渲染");
-      }
-    }).catch(() => {
-      showPreviewEmpty("暂无渲染结果，请先渲染");
-    });
+    showStudioPreview();
   }
 }
 
@@ -92,15 +95,21 @@ function updateInfo() {
   dirInfo.textContent = tags.length ? tags.join(" / ") : "无附加数据";
 }
 
-function onDirChange() {
+async function onDirChange() {
   currentDirName = dirSelect.value;
-  currentTab = "rendered";
+  currentTab = "preview";
   tabs.forEach((t) => {
-    t.classList.toggle("active", t.dataset.tab === "rendered");
+    t.classList.toggle("active", t.dataset.tab === "preview");
   });
   if (currentDirName) {
     previewPlaceholder.style.display = "none";
     previewSection.classList.add("visible");
+    // Prepare files for Remotion Studio
+    try {
+      await fetch(`/api/prepare/${encodeURIComponent(currentDirName)}`, {
+        method: "POST",
+      });
+    } catch {}
     updatePreview();
   } else {
     previewPlaceholder.style.display = "";
@@ -130,12 +139,6 @@ renderBtn.addEventListener("click", async () => {
     if (data.success) {
       status.className = "status success";
       status.textContent = `渲染完成: ${data.output} (${data.durationSec.toFixed(1)}秒)`;
-      // Auto switch to rendered tab
-      currentTab = "rendered";
-      tabs.forEach((t) => {
-        t.classList.toggle("active", t.dataset.tab === "rendered");
-      });
-      updatePreview();
     } else {
       status.className = "status error";
       status.textContent = "渲染失败: " + (data.error || "未知错误");

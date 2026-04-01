@@ -11,7 +11,7 @@ export interface RenderOptions {
   dirName: string;
 }
 
-function preparePublicDir(dir: DirInfo) {
+export function preparePublicDir(dir: DirInfo) {
   if (fs.existsSync(PUBLIC_DIR)) {
     fs.rmSync(PUBLIC_DIR, { recursive: true });
   }

@@ -170,11 +170,12 @@
     <div id="previewPlaceholder" class="preview-placeholder">选择一个文件夹以预览</div>
     <div id="previewSection" class="preview-section">
       <div class="preview-tabs">
-        <button class="preview-tab active" data-tab="rendered">渲染结果</button>
+        <button class="preview-tab active" data-tab="preview">实时预览</button>
         <button class="preview-tab" data-tab="source">源视频</button>
       </div>
       <div class="preview-wrap">
-        <video id="previewVideo" controls playsinline></video>
+        <iframe id="previewIframe" width="360" height="640" style="display:none;border:none;"></iframe>
+        <video id="previewVideo" controls playsinline style="display:none;"></video>
         <div id="previewEmpty" class="preview-empty" style="display:none">暂无渲染结果，请先渲染</div>
       </div>
     </div>

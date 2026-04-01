@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { getDirs, getDirByName, render } from "./renderer";
+import { getDirs, getDirByName, render, preparePublicDir } from "./renderer";
 
 const app = express();
 const PORT = 3001;
@@ -9,12 +9,27 @@ const PORT = 3001;
 app.use(express.json());
 
 // Serve static UI files
-const uiDir = path.join(__dirname, "ui");
-app.use(express.static(uiDir));
+const ui_dir = path.join(__dirname, "ui");
+app.use(express.static(ui_dir));
 
 // Serve rendered output files
 const outDir = path.join(process.cwd(), "out");
 app.use("/out", express.static(outDir));
+
+// Prepare public dir for Remotion Studio preview
+app.post("/api/prepare/:dirName", (_req, res) => {
+  const dir = getDirByName(_req.params.dirName);
+  if (!dir) {
+    res.status(404).json({ error: "目录不存在" });
+    return;
+  }
+  try {
+    preparePublicDir(dir);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
 
 // Get available directories
 app.get("/api/dirs", (_req, res) => {

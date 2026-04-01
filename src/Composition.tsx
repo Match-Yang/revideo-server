@@ -209,10 +209,7 @@ function CommentItem({ comment }: { comment: Comment }) {
             lineHeight: 1.4,
             margin: 0,
             wordBreak: "break-word",
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
+            whiteSpace: "pre-line",
           }}
         >
           {comment.text}
