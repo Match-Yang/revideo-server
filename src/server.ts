@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { getDirs, getDirByName, render, preparePublicDir } from "./renderer";
+import { scanDir } from "./scan-dir";
 
 const app = express();
 const PORT = 3001;
@@ -15,6 +16,37 @@ app.use(express.static(ui_dir));
 // Serve rendered output files
 const outDir = path.join(process.cwd(), "out");
 app.use("/out", express.static(outDir));
+
+// ============================================================
+// Agent API: single endpoint to render a video folder
+// POST /api/render-folder
+// Body: { "folder": "/absolute/path/to/folder" }
+// Returns: { "outputPath": "/full/system/path/to/output.mp4" }
+// ============================================================
+app.post("/api/render-folder", async (req, res) => {
+  const { folder } = req.body;
+  if (!folder || typeof folder !== "string") {
+    res.status(400).json({ error: "Missing or invalid 'folder' field in request body" });
+    return;
+  }
+
+  const dir = scanDir(folder);
+  if (!dir) {
+    res.status(404).json({ error: `No video file found in: ${folder}` });
+    return;
+  }
+
+  console.log(`[Agent API] Rendering: ${dir.path}`);
+  try {
+    const result = await render(dir);
+    const outputPath = path.resolve(process.cwd(), result.output);
+    console.log(`[Agent API] Done: ${outputPath}`);
+    res.json({ outputPath });
+  } catch (err: any) {
+    console.error(`[Agent API] Error: ${err?.message || err}`);
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
 
 // Prepare public dir for Remotion Studio preview
 app.post("/api/prepare/:dirName", (_req, res) => {
@@ -72,8 +104,8 @@ app.get("/api/preview/:dirName", (req, res) => {
   fs.createReadStream(videoPath).pipe(res);
 });
 
-// Start rendering
-app.post("/api/render/:dirName", (req, res) => {
+// Start rendering (by dir name under ~/Movies)
+app.post("/api/render/:dirName", async (req, res) => {
   const { dirName } = req.params;
   const dir = getDirByName(dirName);
 
@@ -83,7 +115,7 @@ app.post("/api/render/:dirName", (req, res) => {
   }
 
   try {
-    const result = render(dir);
+    const result = await render(dir);
     res.json({ success: true, output: result.output, durationSec: result.durationSec });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || String(err) });
@@ -91,5 +123,6 @@ app.post("/api/render/:dirName", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n  视频渲染UI已启动: http://localhost:${PORT}\n`);
+  console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
+  console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }\n`);
 });

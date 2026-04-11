@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect } from "react";
 import {
   AbsoluteFill,
-  interpolate,
   useCurrentFrame,
   useVideoConfig,
   OffthreadVideo,
@@ -74,6 +73,66 @@ function parseVTT(vttText: string): SubtitleCue[] {
   }
 
   return deduped;
+}
+
+function parseSRT(srtText: string): SubtitleCue[] {
+  const cues: SubtitleCue[] = [];
+  const blocks = srtText.split(/\n\n+/);
+
+  for (const block of blocks) {
+    const lines = block.trim().split("\n");
+    const timeLine = lines.find((l) => l.includes("-->"));
+    if (!timeLine) continue;
+
+    const match = timeLine.match(
+      /(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})/
+    );
+    if (!match) continue;
+
+    const start =
+      +match[1] * 3600 + +match[2] * 60 + +match[3] + +match[4] / 1000;
+    const end =
+      +match[5] * 3600 + +match[6] * 60 + +match[7] + +match[8] / 1000;
+
+    const textLines = lines
+      .filter((l) => !l.includes("-->") && !/^\d+$/.test(l.trim()))
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    // Deduplicate within block (SRT streaming artifact)
+    const unique = [];
+    let prev = "";
+    for (const tl of textLines) {
+      if (tl !== prev) {
+        unique.push(tl);
+        prev = tl;
+      }
+    }
+    const text = unique.join(" ");
+    if (text) {
+      cues.push({ start, end, text });
+    }
+  }
+
+  // Deduplicate consecutive cues with identical text
+  const deduped: SubtitleCue[] = [];
+  for (const cue of cues) {
+    if (deduped.length === 0 || deduped[deduped.length - 1].text !== cue.text) {
+      deduped.push(cue);
+    }
+  }
+  return deduped;
+}
+
+function parseSubtitles(text: string): SubtitleCue[] {
+  if (text.includes("-->")) {
+    // Check if SRT (comma in timestamp) or VTT (dot in timestamp)
+    if (/,\d{3}\s*-->/.test(text)) {
+      return parseSRT(text);
+    }
+    return parseVTT(text);
+  }
+  return [];
 }
 
 function SubtitleOverlay({ cues }: { cues: SubtitleCue[] }) {
@@ -152,7 +211,11 @@ function CommentItem({ comment }: { comment: Comment }) {
         }}
       >
         <img
-          src={comment.author_thumbnail}
+          src={
+            comment.author_thumbnail.startsWith("avatars/")
+              ? staticFile(comment.author_thumbnail)
+              : comment.author_thumbnail
+          }
           style={{
             width: 80,
             height: 80,
@@ -233,24 +296,13 @@ function CommentItem({ comment }: { comment: Comment }) {
 
 function CommentsList({ comments }: { comments: Comment[] }) {
   const frame = useCurrentFrame();
-  const { durationInFrames } = useVideoConfig();
 
   const BOTTOM_PADDING = 50;
   const TOP_PADDING = 8;
 
-  const itemsHeight =
-    comments.length * COMMENT_ITEM_HEIGHT +
-    Math.max(0, comments.length - 1) * COMMENT_ITEM_GAP;
-  const totalContentHeight = TOP_PADDING + itemsHeight + BOTTOM_PADDING;
-
-  const visibleHeight = 1280;
-  const maxScroll = Math.max(0, totalContentHeight - visibleHeight);
-
-  const scrollY = interpolate(
-    frame,
-    [0, durationInFrames - 1],
-    [0, -maxScroll],
-  );
+  // Fixed speed: scroll 1 comment per 2 seconds
+  const scrollPerSecond = (COMMENT_ITEM_HEIGHT + COMMENT_ITEM_GAP) / 2;
+  const scrollY = -(frame / 30) * scrollPerSecond;
 
   return (
     <div
@@ -329,7 +381,7 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
       fetch(staticFile(subtitleFiles[0]))
         .then((r) => r.text())
         .then((vttText) => {
-          setSubtitles(parseVTT(vttText));
+          setSubtitles(parseSubtitles(vttText));
           tryContinue();
         })
         .catch((err) => {

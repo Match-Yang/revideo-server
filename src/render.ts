@@ -9,6 +9,20 @@ const VIDEO_EXTS = [".mp4", ".mkv", ".webm", ".mov"];
 const AUDIO_EXTS = [".mp3", ".m4a", ".wav", ".aac"];
 const SUBTITLE_EXTS = [".srt", ".vtt"];
 
+/** Get video duration in seconds using ffprobe */
+function getVideoDuration(videoPath: string): number {
+  try {
+    const out = execSync(
+      `ffprobe -v quiet -print_format json -show_format "${videoPath}"`,
+      { stdio: ["pipe", "pipe", "pipe"] }
+    );
+    const info = JSON.parse(out.toString());
+    return parseFloat(info.format?.duration) || 60;
+  } catch {
+    return 60;
+  }
+}
+
 interface DirOption {
   name: string;
   path: string;
@@ -124,12 +138,13 @@ async function main() {
   console.log("准备文件...");
   preparePublicDir(selected);
 
-  // Get duration from comments.json
-  let durationSec = 60;
+  // Determine duration: comments.json duration > ffprobe > fallback 60s
+  const localVideo = path.join(PUBLIC_DIR, `video${path.extname(selected.videoFile)}`);
+  let durationSec = getVideoDuration(localVideo);
   if (selected.commentFile) {
     try {
       const data = JSON.parse(fs.readFileSync(selected.commentFile, "utf-8"));
-      durationSec = data.duration || 60;
+      if (data.duration) durationSec = data.duration;
     } catch {}
   }
 
@@ -145,16 +160,16 @@ async function main() {
     videoFile: `video${path.extname(selected.videoFile)}`,
     commentFile: selected.commentFile ? "comments.json" : "",
     subtitleFiles: selected.subtitleFiles.length > 0 ? ["subtitles.vtt"] : [],
+    durationInFrames: totalFrames,
   };
 
-  const propsFile = path.join(PUBLIC_DIR, "props.json");
+  // Write props to file to avoid shell escaping issues
+  const propsFile = path.join(PUBLIC_DIR, "render-props.json");
   fs.writeFileSync(propsFile, JSON.stringify(props));
-
-  const propsArg = JSON.stringify(JSON.stringify(props));
 
   execSync(
     `npx remotion render VideoComments out/${selected.name}.mp4 ` +
-      `--props '${propsArg}' ` +
+      `--props "${propsFile}" ` +
       `--fps ${fps} ` +
       `--frames 0-${totalFrames}`,
     {
