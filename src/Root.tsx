@@ -31,21 +31,37 @@ export const RemotionRoot: React.FC = () => {
         schema={videoCommentsSchema}
         defaultProps={defaultProps}
         calculateMetadata={async ({ props }) => {
-          // If duration already set by renderer, use it
-          if (props.durationInFrames && props.durationInFrames > 0) {
-            return { durationInFrames: props.durationInFrames, props };
-          }
-          // Otherwise detect from video file in public/
+          let durationInFrames = props.durationInFrames || 0;
+          let isPortrait = props.isPortrait ?? false;
+          let videoAspectRatio = props.videoAspectRatio ?? 16 / 9;
+
           if (props.videoFile) {
             try {
               const meta = await getVideoMetadata(staticFile(props.videoFile));
-              return {
-                durationInFrames: Math.ceil(meta.durationInSeconds * FPS),
-                props,
-              };
+              if (meta.width && meta.height) {
+                isPortrait = meta.height > meta.width;
+                videoAspectRatio = meta.width / meta.height;
+              }
+              if (!durationInFrames || durationInFrames <= 0) {
+                durationInFrames = Math.ceil(meta.durationInSeconds * FPS);
+              }
             } catch {}
           }
-          return { durationInFrames: 30 * FPS, props };
+
+          if (!durationInFrames || durationInFrames <= 0) {
+            durationInFrames = 30 * FPS;
+          }
+
+          return {
+            durationInFrames,
+            width: isPortrait ? 1920 : WIDTH,
+            height: isPortrait ? 1080 : HEIGHT,
+            props: {
+              ...props,
+              isPortrait,
+              videoAspectRatio,
+            },
+          };
         }}
       />
     </>

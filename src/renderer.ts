@@ -243,5 +243,17 @@ export async function render(
     }
   );
 
+  // Extract first frame as cover image
+  const coverPath = `out/${dir.name}-cover.jpg`;
+  try {
+    execSync(
+      `ffmpeg -y -i "out/${dir.name}.mp4" -frames:v 1 -q:v 2 "${coverPath}"`,
+      { stdio: "pipe", cwd: process.cwd() }
+    );
+    console.log(`[Render] Cover saved: ${coverPath}`);
+  } catch (err) {
+    console.warn(`[Render] Failed to extract cover: ${err}`);
+  }
+
   return { output: `out/${dir.name}.mp4`, durationSec };
 }
