@@ -303,11 +303,11 @@ export async function render(
 
   emit("extracting-cover", 96, "提取封面...");
 
-  // Extract first frame as cover image
+  // Extract first frame from the ORIGINAL video as cover image
   const coverPath = `out/${dir.name}-cover.jpg`;
   try {
     execSync(
-      `ffmpeg -y -i "out/${dir.name}.mp4" -frames:v 1 -q:v 2 "${coverPath}"`,
+      `ffmpeg -y -i "${dir.videoFile}" -frames:v 1 -q:v 2 "${coverPath}"`,
       { stdio: "pipe", cwd: process.cwd() }
     );
     console.log(`[Render] Cover saved: ${coverPath}`);
