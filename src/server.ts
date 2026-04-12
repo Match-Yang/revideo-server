@@ -9,6 +9,28 @@ const PORT = 3001;
 
 app.use(express.json());
 
+// SSE helpers
+function isSSERequest(req: express.Request): boolean {
+  return req.headers.accept?.includes("text/event-stream") === true;
+}
+
+function setupSSE(res: express.Response) {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  return {
+    sendProgress(data: any) {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    },
+    sendEvent(event: string, data: any) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    },
+    end() { res.end(); },
+  };
+}
+
 // Serve static UI files
 const ui_dir = path.join(__dirname, "ui");
 app.use(express.static(ui_dir));
@@ -37,14 +59,29 @@ app.post("/api/render-folder", async (req, res) => {
   }
 
   console.log(`[Agent API] Rendering: ${dir.path}`);
-  try {
-    const result = await render(dir);
-    const outputPath = path.resolve(process.cwd(), result.output);
-    console.log(`[Agent API] Done: ${outputPath}`);
-    res.json({ outputPath });
-  } catch (err: any) {
-    console.error(`[Agent API] Error: ${err?.message || err}`);
-    res.status(500).json({ error: err?.message || String(err) });
+
+  if (isSSERequest(req)) {
+    const sse = setupSSE(res);
+    try {
+      const result = await render(dir, (p) => sse.sendProgress(p));
+      const outputPath = path.resolve(process.cwd(), result.output);
+      console.log(`[Agent API] Done: ${outputPath}`);
+      sse.sendEvent("done", { outputPath });
+    } catch (err: any) {
+      console.error(`[Agent API] Error: ${err?.message || err}`);
+      sse.sendEvent("error", { error: err?.message || String(err) });
+    }
+    sse.end();
+  } else {
+    try {
+      const result = await render(dir);
+      const outputPath = path.resolve(process.cwd(), result.output);
+      console.log(`[Agent API] Done: ${outputPath}`);
+      res.json({ outputPath });
+    } catch (err: any) {
+      console.error(`[Agent API] Error: ${err?.message || err}`);
+      res.status(500).json({ error: err?.message || String(err) });
+    }
   }
 });
 
@@ -114,11 +151,22 @@ app.post("/api/render/:dirName", async (req, res) => {
     return;
   }
 
-  try {
-    const result = await render(dir);
-    res.json({ success: true, output: result.output, durationSec: result.durationSec });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || String(err) });
+  if (isSSERequest(req)) {
+    const sse = setupSSE(res);
+    try {
+      const result = await render(dir, (p) => sse.sendProgress(p));
+      sse.sendEvent("done", { success: true, output: result.output, durationSec: result.durationSec });
+    } catch (err: any) {
+      sse.sendEvent("error", { error: err?.message || String(err) });
+    }
+    sse.end();
+  } else {
+    try {
+      const result = await render(dir);
+      res.json({ success: true, output: result.output, durationSec: result.durationSec });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || String(err) });
+    }
   }
 });
 

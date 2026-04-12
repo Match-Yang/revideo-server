@@ -133,15 +133,64 @@ renderBtn.addEventListener("click", async () => {
   try {
     const res = await fetch(`/api/render/${encodeURIComponent(dirName)}`, {
       method: "POST",
+      headers: { Accept: "text/event-stream" },
     });
-    const data = await res.json();
 
-    if (data.success) {
-      status.className = "status success";
-      status.textContent = `渲染完成: ${data.output} (${data.durationSec.toFixed(1)}秒)`;
+    const contentType = res.headers.get("content-type") || "";
+
+    if (contentType.includes("text/event-stream")) {
+      // SSE mode - show real-time progress
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events (separated by blank lines)
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+
+        for (const event of events) {
+          let eventName = "message";
+          let data = "";
+          for (const line of event.split("\n")) {
+            if (line.startsWith("event: ")) eventName = line.slice(7);
+            else if (line.startsWith("data: ")) data = line.slice(6);
+          }
+
+          if (eventName === "progress") {
+            try {
+              const p = JSON.parse(data);
+              status.textContent = p.message || `渲染中 ${p.percent}%`;
+            } catch {}
+          } else if (eventName === "done") {
+            try {
+              const d = JSON.parse(data);
+              status.className = "status success";
+              status.textContent = `渲染完成: ${d.output} (${d.durationSec.toFixed(1)}秒)`;
+            } catch {}
+          } else if (eventName === "error") {
+            try {
+              const e = JSON.parse(data);
+              status.className = "status error";
+              status.textContent = "渲染失败: " + (e.error || "未知错误");
+            } catch {}
+          }
+        }
+      }
     } else {
-      status.className = "status error";
-      status.textContent = "渲染失败: " + (data.error || "未知错误");
+      // JSON fallback (backward compatible)
+      const data = await res.json();
+      if (data.success) {
+        status.className = "status success";
+        status.textContent = `渲染完成: ${data.output} (${data.durationSec.toFixed(1)}秒)`;
+      } else {
+        status.className = "status error";
+        status.textContent = "渲染失败: " + (data.error || "未知错误");
+      }
     }
   } catch (err) {
     status.className = "status error";

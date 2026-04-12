@@ -5,6 +5,10 @@ import https from "https";
 import http from "http";
 import type { DirInfo, Comment } from "./types";
 import { scanMoviesDir } from "./scan-dir";
+import { bundle } from "@remotion/bundler";
+import { renderMedia, selectComposition } from "@remotion/renderer";
+import type { RenderMediaOnProgress } from "@remotion/renderer";
+import { enableTailwind } from "@remotion/tailwind-v4";
 
 const PROXY = "http://127.0.0.1:7897";
 
@@ -53,6 +57,12 @@ const PUBLIC_DIR = path.join(process.cwd(), "public");
 
 export interface RenderOptions {
   dirName: string;
+}
+
+export interface RenderProgress {
+  stage: string;
+  percent: number;
+  message: string;
 }
 
 /** Normalize comments.json to { comments: Comment[], duration: number } format */
@@ -193,9 +203,17 @@ export function getDirByName(name: string): DirInfo | undefined {
 }
 
 export async function render(
-  dir: DirInfo
+  dir: DirInfo,
+  onProgress?: (progress: RenderProgress) => void
 ): Promise<{ output: string; durationSec: number }> {
+  const emit = (stage: string, percent: number, message: string) => {
+    onProgress?.({ stage, percent, message });
+  };
+
+  emit("preparing", 0, "准备文件...");
   preparePublicDir(dir);
+
+  emit("downloading-avatars", 3, "下载头像...");
   await downloadAvatars();
 
   // Determine duration: comments.json duration > ffprobe > fallback 60s
@@ -213,17 +231,13 @@ export async function render(
   const fps = 30;
   const totalFrames = Math.ceil(durationSec * fps);
 
-  const props = {
+  const inputProps = {
     dirPath: dir.path,
     videoFile: `video${videoExt}`,
     commentFile: dir.commentFile ? "comments.json" : "",
     subtitleFiles: dir.subtitleFiles.length > 0 ? [path.basename(dir.subtitleFiles[0])] : [],
     durationInFrames: totalFrames,
   };
-
-  // Write props to file to avoid shell escaping issues
-  const propsFile = path.join(PUBLIC_DIR, "render-props.json");
-  fs.writeFileSync(propsFile, JSON.stringify(props));
 
   // Ensure out dir exists
   const outDir = path.join(process.cwd(), "out");
@@ -233,15 +247,61 @@ export async function render(
 
   console.log(`[Render] Duration: ${durationSec}s, Frames: ${totalFrames}, Comments: ${fs.existsSync(commentsPath)}`);
 
-  execSync(
-    `npx remotion render VideoComments out/${dir.name}.mp4 ` +
-      `--props "${propsFile}" ` +
-      `--fps ${fps}`,
-    {
-      stdio: "inherit",
-      cwd: process.cwd(),
+  // Bundle the Remotion project
+  emit("bundling", 5, "打包项目...");
+  const bundleLocation = await bundle({
+    entryPoint: path.resolve("./src/index.ts"),
+    webpackOverride: enableTailwind,
+  });
+
+  // Select composition with inputProps (triggers calculateMetadata)
+  const composition = await selectComposition({
+    serveUrl: bundleLocation,
+    id: "VideoComments",
+    inputProps,
+  });
+
+  const totalRenderFrames = composition.durationInFrames;
+
+  // Render with full progress tracking (frames + encoding)
+  let lastOverallPercent = 8;
+
+  const onRenderProgress: RenderMediaOnProgress = ({
+    progress,
+    renderedFrames,
+    encodedFrames,
+    stitchStage,
+  }) => {
+    // progress is 0-1, map to 8-95%
+    const overallPercent = 8 + Math.round(progress * 87);
+    if (overallPercent <= lastOverallPercent) return;
+    lastOverallPercent = overallPercent;
+
+    const pct = Math.round(progress * 100);
+    if (stitchStage === "muxing") {
+      emit("muxing", overallPercent, `合成音轨 ${pct}%`);
+    } else if (encodedFrames === 0) {
+      // encodedFrames=0 means frames are being rendered but not yet encoded
+      emit("rendering", overallPercent, `渲染帧 ${pct}% (${renderedFrames}/${totalRenderFrames})`);
+    } else {
+      emit("encoding", overallPercent, `编码视频 ${pct}% (${encodedFrames}/${totalRenderFrames})`);
     }
-  );
+  };
+
+  emit("rendering", 8, `开始渲染 (${totalRenderFrames} 帧, ${durationSec.toFixed(1)}s)...`);
+
+  await renderMedia({
+    composition,
+    serveUrl: bundleLocation,
+    codec: "h264",
+    outputLocation: `out/${dir.name}.mp4`,
+    inputProps,
+    imageFormat: "jpeg",
+    overwrite: true,
+    onProgress: onRenderProgress,
+  });
+
+  emit("extracting-cover", 96, "提取封面...");
 
   // Extract first frame as cover image
   const coverPath = `out/${dir.name}-cover.jpg`;
@@ -255,5 +315,6 @@ export async function render(
     console.warn(`[Render] Failed to extract cover: ${err}`);
   }
 
+  emit("done", 100, "渲染完成");
   return { output: `out/${dir.name}.mp4`, durationSec };
 }
