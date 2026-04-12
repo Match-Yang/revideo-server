@@ -54,8 +54,8 @@ export const RemotionRoot: React.FC = () => {
 
           return {
             durationInFrames,
-            width: isPortrait ? 1920 : WIDTH,
-            height: isPortrait ? 1080 : HEIGHT,
+            width: WIDTH,
+            height: HEIGHT,
             props: {
               ...props,
               isPortrait,

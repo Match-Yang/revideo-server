@@ -397,7 +397,7 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
     }
   }, [commentFile, subtitleFiles, handle]);
 
-  const { durationInFrames, fps, height: canvasHeight } = useVideoConfig();
+  const { durationInFrames, fps, width: canvasWidth, height: canvasHeight } = useVideoConfig();
   const videoSeconds = durationInFrames / fps;
   const maxComments = Math.floor(videoSeconds / 2);
 
@@ -409,20 +409,23 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
   const videoSrc = videoFile ? staticFile(videoFile) : "";
   const aspectRatio = videoAspectRatio || 16 / 9;
 
+  const COMMENT_GAP = 20;
+
   if (isPortrait) {
-    // Portrait video → landscape 16:9 output, video left + comments right
-    const videoDisplayWidth = Math.round(canvasHeight * aspectRatio);
+    // Portrait video → portrait 9:16 canvas, video top half + comments bottom half
+    const videoAreaHeight = Math.round(canvasHeight / 2);
+    const commentAreaHeight = canvasHeight - videoAreaHeight;
 
     return (
       <AbsoluteFill style={{ backgroundColor: "#000" }}>
-        {/* Left: Video */}
+        {/* Top half: Video area */}
         <div
           style={{
             position: "absolute",
             top: 0,
             left: 0,
-            width: videoDisplayWidth,
-            height: canvasHeight,
+            right: 0,
+            height: videoAreaHeight,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -434,8 +437,8 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
             <OffthreadVideo
               src={videoSrc}
               style={{
-                width: "100%",
                 height: "100%",
+                aspectRatio: String(aspectRatio),
                 objectFit: "contain",
               }}
             />
@@ -443,12 +446,12 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
           <SubtitleOverlay cues={subtitles} />
         </div>
 
-        {/* Right: Comments */}
+        {/* Bottom half: Comments */}
         <div
           style={{
             position: "absolute",
-            top: 0,
-            left: videoDisplayWidth,
+            top: videoAreaHeight + COMMENT_GAP,
+            left: 0,
             right: 0,
             bottom: 0,
             backgroundColor: "#000",
@@ -461,17 +464,19 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
     );
   }
 
-  // Landscape video → portrait 9:16 output, video top + comments bottom
+  // Landscape video → portrait 9:16 canvas, video top (full width) + comments bottom
+  const videoDisplayHeight = Math.round(canvasWidth / aspectRatio);
+
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {/* Top section: Video */}
+      {/* Top: Video at full width */}
       <div
         style={{
           position: "absolute",
           top: 0,
           left: 0,
           right: 0,
-          height: 620,
+          height: videoDisplayHeight,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -492,11 +497,11 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
         <SubtitleOverlay cues={subtitles} />
       </div>
 
-      {/* Bottom section: Scrolling comments */}
+      {/* Bottom: Scrolling comments */}
       <div
         style={{
           position: "absolute",
-          top: 640,
+          top: videoDisplayHeight + COMMENT_GAP,
           left: 0,
           right: 0,
           bottom: 0,

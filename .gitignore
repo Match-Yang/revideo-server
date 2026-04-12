@@ -1,9 +1,37 @@
-node_modules
-dist
-.DS_Store
-.env
-public/
+# Dependencies
+node_modules/
+
+# Build output
+dist/
 build/
 
-# Ignore the output video from Git but not videos you import into src/.
-out
+# Public (runtime populated by render - contains source video, subtitles, comments)
+public/
+
+# Rendered output
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Remotion cache
+.remotion/
