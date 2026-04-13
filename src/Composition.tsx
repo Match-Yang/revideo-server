@@ -299,12 +299,24 @@ function CommentItem({ comment }: { comment: Comment }) {
 function CommentsList({ comments }: { comments: Comment[] }) {
   const frame = useCurrentFrame();
 
-  const BOTTOM_PADDING = 50;
   const TOP_PADDING = 8;
+
+  if (comments.length === 0) return null;
 
   // Fixed speed: scroll 1 comment per 2 seconds
   const scrollPerSecond = (COMMENT_ITEM_HEIGHT + COMMENT_ITEM_GAP) / 2;
-  const scrollY = -(frame / 30) * scrollPerSecond;
+
+  // Total height of one full cycle of comments
+  const cycleHeight =
+    comments.length * (COMMENT_ITEM_HEIGHT + COMMENT_ITEM_GAP);
+
+  // Use modulo to loop the scroll position
+  const rawY = (frame / 30) * scrollPerSecond;
+  const loopedY = rawY % cycleHeight;
+
+  // Duplicate comments enough times to cover seamless looping
+  // (original + at least 2 copies so the visible area is always filled)
+  const repeatCount = 3;
 
   return (
     <div
@@ -317,13 +329,14 @@ function CommentsList({ comments }: { comments: Comment[] }) {
         flexDirection: "column",
         gap: COMMENT_ITEM_GAP,
         paddingTop: TOP_PADDING,
-        transform: `translateY(${scrollY}px)`,
+        transform: `translateY(${-loopedY}px)`,
       }}
     >
-      {comments.map((c) => (
-        <CommentItem key={c.id} comment={c} />
-      ))}
-      <div style={{ height: BOTTOM_PADDING, flexShrink: 0 }} />
+      {Array.from({ length: repeatCount }, (_, ri) =>
+        comments.map((c) => (
+          <CommentItem key={`${ri}-${c.id}`} comment={c} />
+        )),
+      ).flat()}
     </div>
   );
 }
@@ -397,14 +410,9 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
     }
   }, [commentFile, subtitleFiles, handle]);
 
-  const { durationInFrames, fps, width: canvasWidth, height: canvasHeight } = useVideoConfig();
-  const videoSeconds = durationInFrames / fps;
-  const maxComments = Math.floor(videoSeconds / 2);
+  const { width: canvasWidth, height: canvasHeight } = useVideoConfig();
 
-  const selectedComments = useMemo(
-    () => comments.slice(0, maxComments),
-    [comments, maxComments],
-  );
+  const selectedComments = useMemo(() => comments, [comments]);
 
   const videoSrc = videoFile ? staticFile(videoFile) : "";
   const aspectRatio = videoAspectRatio || 16 / 9;
