@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { getDirs, getDirByName, render, preparePublicDir } from "./renderer";
 import { scanDir } from "./scan-dir";
+import { publish, type PublishRequest } from "./publish";
 
 const app = express();
 const PORT = 3001;
@@ -170,7 +171,45 @@ app.post("/api/render/:dirName", async (req, res) => {
   }
 });
 
+// ============================================================
+// Agent API: publish video to platforms
+// POST /api/publish
+// Body: { videoPath, platforms, bilibili?, douyin?, cdpEndpoint? }
+// Returns: SSE stream with progress events
+// ============================================================
+app.post("/api/publish", async (req, res) => {
+  const body = req.body as PublishRequest;
+
+  if (!body.videoPath || !body.platforms?.length) {
+    res.status(400).json({ error: "Missing videoPath or platforms" });
+    return;
+  }
+
+  console.log(`[Publish API] Publishing ${body.videoPath} to ${body.platforms.join(", ")}`);
+
+  if (isSSERequest(req)) {
+    const sse = setupSSE(res);
+    try {
+      const results = await publish(body, (p) => sse.sendProgress(p));
+      sse.sendEvent("done", { results });
+      console.log(`[Publish API] Done:`, JSON.stringify(results));
+    } catch (err: any) {
+      console.error(`[Publish API] Error: ${err?.message || err}`);
+      sse.sendEvent("error", { error: err?.message || String(err) });
+    }
+    sse.end();
+  } else {
+    try {
+      const results = await publish(body, () => {});
+      res.json({ results });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || String(err) });
+    }
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
-  console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }\n`);
+  console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }`);
+  console.log(`  Agent API: POST /api/publish        { "videoPath": "...", "platforms": ["bilibili","douyin"] }\n`);
 });
