@@ -31,7 +31,7 @@ async function discoverCdpEndpoint(): Promise<string> {
 
 async function connectBrowser(cdpEndpoint?: string): Promise<Browser> {
   const ws = cdpEndpoint || (await discoverCdpEndpoint());
-  return puppeteer.connect({ browserWSEndpoint: ws });
+  return puppeteer.connect({ browserWSEndpoint: ws, protocolTimeout: 300000 });
 }
 
 async function findOrCreatePage(browser: Browser, urlPattern: string): Promise<Page> {
@@ -67,14 +67,14 @@ async function closePopups(page: Page) {
 }
 
 async function uploadFile(page: Page, filePath: string) {
-  const [fileChooser] = await Promise.all([
-    page.waitForFileChooser({ timeout: 15000 }),
-    page.evaluate(() => {
-      const input = document.querySelector('input[type="file"]');
-      if (input) (input as HTMLInputElement).click();
-    }),
-  ]);
-  await fileChooser.accept([filePath]);
+  // Wait for file input to exist on the page
+  await page.waitForSelector('input[type="file"]', { timeout: 30000 });
+  await sleep(500);
+  // Use the first file input and set files directly
+  const fileInput = await page.$('input[type="file"]');
+  if (fileInput) {
+    await fileInput.uploadFile(filePath);
+  }
 }
 
 // ============================================================
@@ -182,36 +182,151 @@ async function publishBilibili(
       }
     }
 
+    // Upload cover image (required by Bilibili)
+    onProgress({ stage: "filling", percent: 60, message: "正在上传封面..." });
+    try {
+      const { execSync } = require('child_process');
+      const path = require('path');
+      const fs = require('fs');
+      let coverPath = videoPath.replace(/\.mp4$/, '-cover.jpg');
+      // Also try removing -cut suffix (e.g. video-cut.mp4 → video-cover.jpg)
+      if (!fs.existsSync(coverPath)) {
+        const baseCover = videoPath.replace(/-cut\.mp4$/, '-cover.jpg');
+        if (baseCover !== coverPath && fs.existsSync(baseCover)) coverPath = baseCover;
+      }
+      // If cover doesn't exist next to video, try extracting from video
+      if (!fs.existsSync(coverPath)) {
+        const tmpCover = path.join(require('os').tmpdir(), `bili-cover-${Date.now()}.jpg`);
+        // Use -ss BEFORE -i to seek fast without full decode, limit resolution to save memory
+        try {
+          execSync(`ffmpeg -nostdin -y -ss 2 -i "${videoPath}" -frames:v 1 -vf "scale=640:-1" -q:v 2 "${tmpCover}"`, { stdio: 'ignore', maxBuffer: 1024 * 1024 });
+          if (fs.existsSync(tmpCover)) coverPath = tmpCover;
+        } catch(e) {
+          console.log('[Cover] ffmpeg failed, B站 will use auto-generated cover');
+        }
+      }
+      if (fs.existsSync(coverPath)) {
+        console.log('[Cover] Using cover:', coverPath);
+        // B站封面上传流程（已验证）：
+        // 1. 点击 .edit-text "封面设置" → 打开封面制作弹窗
+        // 2. 弹窗内有 input[type="file"][accept="image/png, image/jpeg"]
+        // 3. 直接 uploadFile 到该 input 即可
+        // 注意：file input 只在弹窗打开后才动态创建！
+        const editBtn = await page.$('.edit-text');
+        if (editBtn) {
+          console.log('[Cover] Clicking 封面设置...');
+          await editBtn.click();
+          console.log('[Cover] Waiting for dialog to open...');
+          // Wait for cover dialog to appear (check for image file input)
+          try {
+            await page.waitForFunction(
+              () => !!document.querySelector('input[type="file"][accept*="image"]'),
+              { timeout: 10000 }
+            );
+            console.log('[Cover] Dialog opened, image file input found');
+          } catch (e) {
+            console.log('[Cover] Dialog did not open after 10s, page HTML snippet:');
+            const snippet = await page.evaluate(() => {
+              const ce = document.querySelector('.cover-empty');
+              return ce ? ce.outerHTML.substring(0, 300) : 'no .cover-empty';
+            });
+            console.log('[Cover]', snippet);
+            // Try clicking the parent div instead of the span
+            await page.evaluate(() => {
+              const ce = document.querySelector('.cover-empty');
+              if (ce) ce.click();
+            });
+            await sleep(3000);
+          }
+          // 勾选"双比例同步改动"checkbox，这样上传一次封面自动同步4:3和16:9
+          await page.evaluate(() => {
+            const checkbox = document.querySelector('.bcc-checkbox-checkbox');
+            if (checkbox) {
+              const input = checkbox.querySelector('input[type="checkbox"]');
+              if (input && !input.checked) {
+                checkbox.click();
+              }
+            }
+          });
+          console.log('[Cover] Checked 双比例同步改动');
+          await sleep(500);
+          // 弹窗已打开（或重试后），找 image file input
+          const coverInputs = await page.$$('input[type="file"][accept*="image"]');
+          console.log('[Cover] Image file inputs found:', coverInputs.length);
+          if (coverInputs.length > 0) {
+            await coverInputs[0].uploadFile(coverPath);
+            console.log('[Cover] Uploaded cover via file input');
+            onProgress({ stage: "filling", percent: 62, message: "封面上传中..." });
+            await sleep(3000);
+          } else {
+            console.log('[Cover] No image file input found, cannot upload cover');
+          }
+          // 关闭封面制作弹窗 - 点击"完成"按钮确认封面
+          const confirmResult = await page.evaluate(() => {
+            const submitBtn = document.querySelector('.cover-editor-button .button.submit');
+            if (submitBtn) { submitBtn.click(); return 'clicked submit'; }
+            const fallback = Array.from(document.querySelectorAll('span, button, div'))
+              .find(el => el.textContent.trim() === '完成' && el.classList.contains('submit') && el.offsetHeight > 0);
+            if (fallback) { fallback.click(); return 'clicked fallback'; }
+            return 'not found';
+          });
+          console.log('[Cover] Close dialog:', confirmResult);
+          await sleep(1000);
+        } else {
+          console.log('[Cover] No 封面设置 button found, B站 will use auto-generated cover');
+        }
+      } else {
+        console.log('[Cover] No cover image found, B站 will use auto-generated cover');
+      }
+    } catch (e) {
+      console.error('Cover upload failed:', e);
+    }
+
     await sleep(1000);
 
-    // Submit - remove overlays first, then click
+    // Submit - click the submit button
     onProgress({ stage: "submitting", percent: 65, message: "正在提交投稿..." });
-    await page.evaluate(() => {
-      document.querySelectorAll(".bcc-overlay").forEach((o) => o.remove());
-      document.querySelectorAll(".bcc-dialog__wrapper").forEach((d) => {
-        if (d.offsetHeight > 0) d.remove();
-      });
-    });
-    await sleep(500);
-
+    const currentUrl = page.url();
     await page.evaluate(() => {
       const btn = document.querySelector("span.submit-add");
       if (btn) (btn as HTMLElement).click();
     });
 
-    // Wait for success indicator
+    // Wait for success - either "稿件投递成功" text or URL change (redirect to management)
     onProgress({ stage: "submitting", percent: 75, message: "等待投稿确认..." });
-    await page.waitForFunction(
-      () => document.body.innerText.includes("稿件投递成功"),
-      { timeout: 30000 }
-    ).catch(() => {
-      // Timeout is ok - might have already navigated
+    try {
+      await Promise.race([
+        page.waitForFunction(
+          () => document.body.innerText.includes("稿件投递成功"),
+          { timeout: 30000 }
+        ),
+        page.waitForNavigation({ timeout: 30000 }),
+      ]);
+      console.log('[Submit] Navigation or success detected');
+    } catch (e) {
+      // Check if URL changed (might have navigated to management page)
+      const newUrl = page.url();
+      if (newUrl !== currentUrl) {
+        console.log('[Submit] URL changed to:', newUrl);
+      } else {
+        console.log('[Submit] No navigation detected, checking submit button state...');
+      }
+    }
+
+    // Disable beforeunload handler to prevent "确定要离开吗" dialog on disconnect
+    await page.evaluate(() => {
+      window.onbeforeunload = null;
     });
 
     await sleep(2000);
     onProgress({ stage: "done-bilibili", percent: 50, message: "✅ B站投稿成功！" });
+  } catch (e) {
+    // Disable beforeunload before disconnect to avoid dialog
+    try { await page.evaluate(() => { window.onbeforeunload = null; }); } catch (e2) {}
+    throw e;
   } finally {
-    await browser.disconnect();
+    try { await page.evaluate(() => { window.onbeforeunload = null; }); } catch (e) {}
+    try { await browser.disconnect(); } catch (e) {}
   }
 }
 
