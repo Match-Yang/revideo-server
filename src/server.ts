@@ -4,6 +4,18 @@ import fs from "fs";
 import { getDirs, getDirByName, render, preparePublicDir } from "./renderer";
 import { scanDir } from "./scan-dir";
 import { publish, type PublishRequest } from "./publish";
+import {
+  createTask,
+  getAllTasks,
+  getTaskById,
+  updateTask,
+  deleteTask,
+  getTaskStatistics,
+  isTaskComplete,
+  getTaskProgress,
+  cleanupExpiredTasks,
+} from "./task-manager";
+import type { AddTaskRequest, UpdateTaskRequest, TaskFilter } from "./types";
 
 const app = express();
 const PORT = 3001;
@@ -208,8 +220,131 @@ app.post("/api/publish", async (req, res) => {
   }
 });
 
+// ============================================================
+// Task Management API
+// ============================================================
+
+// Create a new publish task
+app.post("/api/tasks", (req, res) => {
+  try {
+    const { originalUrl, initialStatus } = req.body as AddTaskRequest;
+    if (!originalUrl) {
+      res.status(400).json({ error: "originalUrl is required" });
+      return;
+    }
+    const task = createTask(originalUrl, initialStatus);
+    res.json({ success: true, task });
+  } catch (err) {
+    console.error("[Tasks API] Error creating task:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// List tasks (with optional filters)
+app.get("/api/tasks", (req, res) => {
+  try {
+    const filter: TaskFilter = {};
+    if (req.query.status) filter.status = req.query.status as any;
+    if (req.query.platform) filter.platform = req.query.platform as any;
+    if (req.query.published !== undefined)
+      filter.published = req.query.published === "true";
+    if (req.query.since)
+      filter.since = parseInt(req.query.since as string);
+
+    const tasks = getAllTasks(filter);
+    const pending = tasks.filter((t) => !isTaskComplete(t)).length;
+
+    res.json({ tasks, total: tasks.length, pending });
+  } catch (err) {
+    console.error("[Tasks API] Error fetching tasks:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Get a specific task
+app.get("/api/tasks/stats", (_req, res) => {
+  try {
+    const stats = getTaskStatistics();
+    res.json(stats);
+  } catch (err) {
+    console.error("[Tasks API] Error fetching statistics:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.get("/api/tasks/:taskId", (req, res) => {
+  try {
+    const task = getTaskById(req.params.taskId);
+    if (!task) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.json({
+      success: true,
+      task,
+      isCompleted: isTaskComplete(task),
+      progress: getTaskProgress(task),
+    });
+  } catch (err) {
+    console.error("[Tasks API] Error fetching task:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Update a task
+app.put("/api/tasks/:taskId", (req, res) => {
+  try {
+    const { updates } = req.body as UpdateTaskRequest;
+    if (!updates) {
+      res.status(400).json({ error: "updates field is required" });
+      return;
+    }
+    const task = updateTask(req.params.taskId, updates);
+    if (!task) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.json({
+      success: true,
+      task,
+      isCompleted: isTaskComplete(task),
+      progress: getTaskProgress(task),
+    });
+  } catch (err) {
+    console.error("[Tasks API] Error updating task:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Delete a task
+app.delete("/api/tasks/:taskId", (req, res) => {
+  try {
+    const success = deleteTask(req.params.taskId);
+    if (!success) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[Tasks API] Error deleting task:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// Manual cleanup of expired tasks
+app.post("/api/tasks/cleanup", (_req, res) => {
+  try {
+    const removedCount = cleanupExpiredTasks();
+    res.json({ success: true, removedCount });
+  } catch (err) {
+    console.error("[Tasks API] Error cleaning up tasks:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
   console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }`);
-  console.log(`  Agent API: POST /api/publish        { "videoPath": "...", "platforms": ["bilibili","douyin"] }\n`);
+  console.log(`  Agent API: POST /api/publish        { "videoPath": "...", "platforms": ["bilibili","douyin"] }`);
+  console.log(`  Task API:   GET/POST/PUT/DELETE /api/tasks\n`);
 });

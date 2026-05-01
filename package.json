@@ -1,7 +1,7 @@
 {
-  "name": "copy-video",
+  "name": "revideo-server",
   "version": "1.0.0",
-  "description": "My Remotion video",
+  "description": "Revideo Server",
   "repository": {},
   "license": "UNLICENSED",
   "private": true,

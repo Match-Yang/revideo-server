@@ -1,0 +1,173 @@
+{
+  "tasks": [
+    {
+      "id": "task_1777633234189_08x4jwmxk",
+      "originalUrl": "https://youtube.com/shorts/Zqi3OXHg7c0",
+      "downloadStatus": {
+        "video": true,
+        "subtitles": true,
+        "comments": true
+      },
+      "translationStatus": {
+        "subtitles": "completed",
+        "comments": "completed"
+      },
+      "renderStatus": "completed",
+      "publishStatus": {
+        "bilibili": {
+          "published": true
+        },
+        "douyin": {
+          "published": true
+        }
+      },
+      "createdAt": 1777633234189,
+      "updatedAt": 1777633417134
+    },
+    {
+      "id": "task_1777634122025_2pquse9hn",
+      "originalUrl": "https://youtube.com/shorts/FjMAei-aplo",
+      "downloadStatus": {
+        "video": true,
+        "subtitles": true,
+        "comments": true
+      },
+      "translationStatus": {
+        "subtitles": "completed",
+        "comments": "completed"
+      },
+      "renderStatus": "completed",
+      "publishStatus": {
+        "bilibili": {
+          "published": true
+        },
+        "douyin": {
+          "published": true
+        }
+      },
+      "createdAt": 1777634122024,
+      "updatedAt": 1777634706689
+    },
+    {
+      "id": "task_1777634752603_c3wdz6blp",
+      "originalUrl": "https://youtube.com/shorts/zVyL9Pmwce8",
+      "downloadStatus": {
+        "video": true,
+        "subtitles": true,
+        "comments": true
+      },
+      "translationStatus": {
+        "subtitles": "completed",
+        "comments": "completed"
+      },
+      "renderStatus": "completed",
+      "publishStatus": {
+        "bilibili": {
+          "published": true
+        },
+        "douyin": {
+          "published": true
+        }
+      },
+      "createdAt": 1777634752603,
+      "updatedAt": 1777635209702
+    },
+    {
+      "id": "task_1777634752603_pmwjny258",
+      "originalUrl": "https://youtube.com/shorts/QFq4a3wR2lY",
+      "downloadStatus": {
+        "video": true,
+        "subtitles": true,
+        "comments": true
+      },
+      "translationStatus": {
+        "subtitles": "completed",
+        "comments": "completed"
+      },
+      "renderStatus": "completed",
+      "publishStatus": {
+        "bilibili": {
+          "published": true
+        },
+        "douyin": {
+          "published": true
+        }
+      },
+      "createdAt": 1777634752603,
+      "updatedAt": 1777635437983
+    },
+    {
+      "id": "task_1777654426394_um9q66zit",
+      "originalUrl": "https://youtube.com/shorts/2z0ZQUgHeXU?si=Er18yKykvE0Ko3ez",
+      "downloadStatus": {
+        "video": true,
+        "subtitles": true,
+        "comments": true
+      },
+      "translationStatus": {
+        "subtitles": "completed",
+        "comments": "completed"
+      },
+      "renderStatus": "completed",
+      "publishStatus": {
+        "bilibili": {
+          "published": true
+        },
+        "douyin": {
+          "published": true
+        }
+      },
+      "createdAt": 1777654426394,
+      "updatedAt": 1777654628453
+    },
+    {
+      "id": "task_1777654907367_xh5g95tds",
+      "originalUrl": "https://youtube.com/shorts/HoOflesLJzw?si=RVSbrEj5fXP9S0i_",
+      "downloadStatus": {
+        "video": true,
+        "subtitles": false,
+        "comments": true
+      },
+      "translationStatus": {
+        "subtitles": "skipped",
+        "comments": "completed"
+      },
+      "renderStatus": "completed",
+      "publishStatus": {
+        "bilibili": {
+          "published": true
+        },
+        "douyin": {
+          "published": true
+        }
+      },
+      "createdAt": 1777654907367,
+      "updatedAt": 1777655389254
+    },
+    {
+      "id": "task_1777656785538_2prp1iohv",
+      "originalUrl": "https://youtube.com/shorts/UB0l-SIK7BE?si=Wwslim5CmKu38ksq",
+      "downloadStatus": {
+        "video": true,
+        "subtitles": false,
+        "comments": true
+      },
+      "translationStatus": {
+        "subtitles": "not-needed",
+        "comments": "translated"
+      },
+      "renderStatus": "completed",
+      "publishStatus": {
+        "bilibili": {
+          "published": true
+        },
+        "douyin": {
+          "published": true
+        }
+      },
+      "createdAt": 1777656785538,
+      "updatedAt": 1777657292780
+    }
+  ],
+  "lastUpdated": 1777657292780
+}

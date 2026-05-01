@@ -33,3 +33,86 @@ export interface DirInfo {
   commentFile?: string;
   subtitleFiles: string[];
 }
+
+// ============================================================
+// 发布任务管理类型
+// ============================================================
+
+export interface DownloadStatus {
+  video: boolean;
+  subtitles: boolean;
+  comments: boolean;
+}
+
+export interface TranslationStatus {
+  subtitles: "not-needed" | "translated" | "pending";
+  comments: "pending" | "translated";
+}
+
+export interface PlatformPublishStatus {
+  title: string;
+  description: string;
+  published: boolean;
+}
+
+export interface BilibiliPublishStatus extends PlatformPublishStatus {
+  tags: string[];
+  category?: string;
+}
+
+export interface PublishStatus {
+  bilibili?: BilibiliPublishStatus;
+  douyin?: PlatformPublishStatus;
+}
+
+export type RenderStatus = "pending" | "rendering" | "completed" | "failed";
+
+export interface PublishTask {
+  id: string;
+  originalUrl: string;
+  downloadStatus: DownloadStatus;
+  translationStatus: TranslationStatus;
+  renderStatus: RenderStatus;
+  publishStatus: PublishStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TasksData {
+  tasks: PublishTask[];
+  lastUpdated: number;
+}
+
+export interface AddTaskRequest {
+  originalUrl: string;
+  initialStatus?: Partial<PublishTask>;
+}
+
+export interface UpdateTaskRequest {
+  taskId: string;
+  updates: Partial<
+    Pick<
+      PublishTask,
+      "downloadStatus" | "translationStatus" | "renderStatus" | "publishStatus"
+    >
+  >;
+}
+
+export interface TaskFilter {
+  status?: RenderStatus;
+  platform?: "bilibili" | "douyin";
+  published?: boolean;
+  since?: number;
+}
+
+export interface TaskStatistics {
+  total: number;
+  pending: number;
+  inProgress: number;
+  completed: number;
+  failed: number;
+  byPlatform: {
+    bilibili: { published: number; pending: number };
+    douyin: { published: number; pending: number };
+  };
+}

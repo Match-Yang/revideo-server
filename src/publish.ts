@@ -9,6 +9,7 @@ interface PublishOptions {
   title: string;
   description: string;
   tags?: string[];
+  category?: string; // Bilibili分区: 汽车, 科技数码, vlog, 美食, etc.
 }
 
 interface PublishProgress {
@@ -44,46 +45,44 @@ async function findOrCreatePage(browser: Browser, urlPattern: string): Promise<P
 }
 
 async function handleDeclarationModal(page: Page): Promise<boolean> {
-  // Check if the declaration modal is present
-  const hasModal = await page.evaluate(() => {
-    return !!document.querySelector('.semi-modal-content');
-  });
-
+  const hasModal = await page.evaluate(() => !!document.querySelector('.semi-modal-content'));
   if (!hasModal) return false;
 
-  // Select "内容为个人观点或见解" by clicking the label (not the input)
+  // Click the radio input element (not the label) for "内容为个人观点或见解"
   await page.evaluate(() => {
     const labels = document.querySelectorAll('.semi-radioGroup label.semi-radio');
     for (const label of labels) {
       const addon = label.querySelector('.semi-radio-addon');
-      if (addon && addon.textContent.trim() === '内容为个人观点或见解') {
-        label.click();
+      if (addon && addon.textContent?.trim() === '内容为个人观点或见解') {
+        const input = label.querySelector('input[type="radio"]');
+        if (input) input.click();
+        else label.click();
         return;
       }
     }
   });
 
-  // Wait for React state to update and confirm button to become enabled
-  await sleep(1000);
+  await sleep(1500);
 
-  // Check if confirm button is enabled, then click it
+  // Click confirm button
   const clicked = await page.evaluate(() => {
-    const btn = document.querySelector('.semi-modal-content button.semi-button-primary');
-    if (btn && !btn.classList.contains('semi-button-disabled') && btn.textContent.trim() === '确定') {
-      btn.click();
-      return true;
+    const btns = document.querySelectorAll('.semi-modal-content button');
+    for (const btn of btns) {
+      if (btn.textContent?.trim() === '确定' && !btn.classList.contains('semi-button-disabled')) {
+        (btn as HTMLElement).click();
+        return true;
+      }
     }
     return false;
   });
 
   if (!clicked) {
-    // Fallback: try clicking anyway after another wait
-    await sleep(500);
+    await sleep(1000);
     await page.evaluate(() => {
-      const btns = document.querySelectorAll('.semi-modal-content button.semi-button-primary');
+      const btns = document.querySelectorAll('.semi-modal-content button');
       for (const btn of btns) {
-        if (btn.textContent.trim() === '确定') {
-          btn.click();
+        if (btn.textContent?.trim() === '确定') {
+          (btn as HTMLElement).click();
           break;
         }
       }
@@ -231,6 +230,36 @@ async function publishBilibili(
           await page.keyboard.press("Enter");
           await sleep(300);
         }
+      }
+    }
+
+    // Select category (分区)
+    if (options.category) {
+      onProgress({ stage: "filling", percent: 52, message: `正在设置分区: ${options.category}...` });
+      try {
+        // Click the select-container to open the dropdown
+        const selectContainer = await page.$('.select-container');
+        if (selectContainer) {
+          await selectContainer.click();
+          await sleep(1000);
+          // Click the target category item
+          const clicked = await page.evaluate((targetCategory: string) => {
+            const items = document.querySelectorAll('.drop-list-v2-item');
+            for (const item of items) {
+              if (item.getAttribute('title') === targetCategory) {
+                (item as HTMLElement).click();
+                return true;
+              }
+            }
+            return false;
+          }, options.category);
+          await sleep(1000);
+          if (!clicked) {
+            console.log(`[Category] "${options.category}" not found in dropdown, keeping default`);
+          }
+        }
+      } catch (e) {
+        console.error('[Category] Failed to set category:', e);
       }
     }
 
@@ -471,24 +500,9 @@ async function publishDouyin(
     await closePopups(page);
     await sleep(500);
 
-    // Click publish button
+    // Click publish & loop: keep handling declaration modal until redirect
     onProgress({ stage: "submitting", percent: 85, message: "正在发布..." });
-    await page.evaluate(() => {
-      document.querySelectorAll("button").forEach((b) => {
-        if (b.textContent.trim() === "发布") {
-          (b as HTMLButtonElement).click();
-        }
-      });
-    });
-
-    // Handle "对作品内容添加声明" modal if it appears
-    await sleep(2000);
-    const modalHandled = await handleDeclarationModal(page);
-
-    // If declaration modal was handled, click publish again
-    if (modalHandled) {
-      onProgress({ stage: "submitting", percent: 87, message: "声明已确认，重新提交发布..." });
-      await sleep(1000);
+    for (let attempt = 0; attempt < 5; attempt++) {
       await page.evaluate(() => {
         document.querySelectorAll("button").forEach((b) => {
           if (b.textContent.trim() === "发布") {
@@ -496,16 +510,32 @@ async function publishDouyin(
           }
         });
       });
-    }
 
-    // Wait for redirect to manage page
-    onProgress({ stage: "submitting", percent: 90, message: "等待发布确认..." });
-    await page
-      .waitForFunction(
-        () => window.location.href.includes("enter_from=publish"),
-        { timeout: 30000 }
-      )
-      .catch(() => {});
+      // Wait for either redirect or modal
+      const redirected = await Promise.race([
+        page.waitForFunction(
+          () => window.location.href.includes("enter_from=publish"),
+          { timeout: 10000 }
+        ).then(async () => {
+          // Avoid false positive: publish_page contains "publish" but isn't success
+          const url = page.url();
+          if (url.includes("enter_from=publish_page")) return false;
+          return true;
+        }).catch(() => false),
+        sleep(3000).then(() => false),
+      ]);
+
+      if (redirected) break;
+
+      const modalHandled = await handleDeclarationModal(page);
+      if (modalHandled) {
+        onProgress({ stage: "submitting", percent: 85 + attempt, message: `声明已确认，重新提交发布 (${attempt + 1})...` });
+        await sleep(1000);
+      } else {
+        // No redirect and no modal — might need more time, retry
+        await sleep(2000);
+      }
+    }
 
     await sleep(2000);
     onProgress({ stage: "done-douyin", percent: 95, message: "✅ 抖音发布成功！" });
@@ -521,7 +551,7 @@ async function publishDouyin(
 export interface PublishRequest {
   videoPath: string;
   platforms: ("bilibili" | "douyin")[];
-  bilibili?: { title: string; description: string; tags?: string[] };
+  bilibili?: { title: string; description: string; tags?: string[]; category?: string };
   douyin?: { title: string; description: string };
   cdpEndpoint?: string;
 }
@@ -555,6 +585,7 @@ export async function publish(
           title: req.bilibili?.title || "",
           description: req.bilibili?.description || "",
           tags: req.bilibili?.tags,
+          category: req.bilibili?.category,
         };
         await publishBilibili(opts, cdpEndpoint, (p) =>
           onProgress({
