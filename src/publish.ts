@@ -43,6 +43,57 @@ async function findOrCreatePage(browser: Browser, urlPattern: string): Promise<P
   return page;
 }
 
+async function handleDeclarationModal(page: Page): Promise<boolean> {
+  // Check if the declaration modal is present
+  const hasModal = await page.evaluate(() => {
+    return !!document.querySelector('.semi-modal-content');
+  });
+
+  if (!hasModal) return false;
+
+  // Select "内容为个人观点或见解" by clicking the label (not the input)
+  await page.evaluate(() => {
+    const labels = document.querySelectorAll('.semi-radioGroup label.semi-radio');
+    for (const label of labels) {
+      const addon = label.querySelector('.semi-radio-addon');
+      if (addon && addon.textContent.trim() === '内容为个人观点或见解') {
+        label.click();
+        return;
+      }
+    }
+  });
+
+  // Wait for React state to update and confirm button to become enabled
+  await sleep(1000);
+
+  // Check if confirm button is enabled, then click it
+  const clicked = await page.evaluate(() => {
+    const btn = document.querySelector('.semi-modal-content button.semi-button-primary');
+    if (btn && !btn.classList.contains('semi-button-disabled') && btn.textContent.trim() === '确定') {
+      btn.click();
+      return true;
+    }
+    return false;
+  });
+
+  if (!clicked) {
+    // Fallback: try clicking anyway after another wait
+    await sleep(500);
+    await page.evaluate(() => {
+      const btns = document.querySelectorAll('.semi-modal-content button.semi-button-primary');
+      for (const btn of btns) {
+        if (btn.textContent.trim() === '确定') {
+          btn.click();
+          break;
+        }
+      }
+    });
+  }
+
+  await sleep(1000);
+  return true;
+}
+
 async function closePopups(page: Page) {
   // Try multiple rounds to close all popups
   for (let round = 0; round < 3; round++) {
@@ -97,6 +148,7 @@ async function publishBilibili(
     onProgress({ stage: "navigating", percent: 5, message: "正在打开B站投稿页..." });
     await page.goto("https://member.bilibili.com/platform/upload/video/frame", {
       waitUntil: "networkidle2",
+      timeout: 180000
     });
     await sleep(3000);
 
@@ -428,6 +480,23 @@ async function publishDouyin(
         }
       });
     });
+
+    // Handle "对作品内容添加声明" modal if it appears
+    await sleep(2000);
+    const modalHandled = await handleDeclarationModal(page);
+
+    // If declaration modal was handled, click publish again
+    if (modalHandled) {
+      onProgress({ stage: "submitting", percent: 87, message: "声明已确认，重新提交发布..." });
+      await sleep(1000);
+      await page.evaluate(() => {
+        document.querySelectorAll("button").forEach((b) => {
+          if (b.textContent.trim() === "发布") {
+            (b as HTMLButtonElement).click();
+          }
+        });
+      });
+    }
 
     // Wait for redirect to manage page
     onProgress({ stage: "submitting", percent: 90, message: "等待发布确认..." });
