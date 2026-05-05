@@ -214,9 +214,9 @@ function CommentItem({ comment }: { comment: Comment }) {
       >
         <img
           src={
-            comment.author_thumbnail.startsWith("avatars/")
+            comment.author_thumbnail?.startsWith("avatars/")
               ? staticFile(comment.author_thumbnail)
-              : comment.author_thumbnail
+              : comment.author_thumbnail || ""
           }
           style={{
             width: 80,
