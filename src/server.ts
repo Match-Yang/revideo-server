@@ -199,10 +199,41 @@ app.post("/api/publish", async (req, res) => {
 
   console.log(`[Publish API] Publishing ${body.videoPath} to ${body.platforms.join(", ")}`);
 
+  const markTaskPublished = async (results: Record<string, { success: boolean; error?: string }>) => {
+    if (!body.taskId) return;
+    const task = getTaskById(body.taskId);
+    if (!task) {
+      console.warn(`[Publish API] Task ${body.taskId} not found, skipping status update`);
+      return;
+    }
+
+    const publishStatus = { ...task.publishStatus };
+    if (results.bilibili?.success) {
+      publishStatus.bilibili = {
+        title: body.bilibili?.title || "",
+        description: body.bilibili?.description || "",
+        tags: body.bilibili?.tags || [],
+        category: body.bilibili?.category,
+        published: true,
+      };
+    }
+    if (results.douyin?.success) {
+      publishStatus.douyin = {
+        title: body.douyin?.title || "",
+        description: body.douyin?.description || "",
+        published: true,
+      };
+    }
+
+    updateTask(body.taskId, { publishStatus });
+    console.log(`[Publish API] Task ${body.taskId} publish status updated`);
+  };
+
   if (isSSERequest(req)) {
     const sse = setupSSE(res);
     try {
       const results = await publish(body, (p) => sse.sendProgress(p));
+      await markTaskPublished(results);
       sse.sendEvent("done", { results });
       console.log(`[Publish API] Done:`, JSON.stringify(results));
     } catch (err: any) {
@@ -213,6 +244,7 @@ app.post("/api/publish", async (req, res) => {
   } else {
     try {
       const results = await publish(body, () => {});
+      await markTaskPublished(results);
       res.json({ results });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || String(err) });

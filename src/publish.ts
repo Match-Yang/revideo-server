@@ -554,6 +554,7 @@ export interface PublishRequest {
   bilibili?: { title: string; description: string; tags?: string[]; category?: string };
   douyin?: { title: string; description: string };
   cdpEndpoint?: string;
+  taskId?: string;
 }
 
 export async function publish(

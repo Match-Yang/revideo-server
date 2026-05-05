@@ -235,6 +235,7 @@ POST /api/publish
 {
   "videoPath": "/path/to/video.mp4",
   "platforms": ["bilibili", "douyin"],
+  "taskId": "task_1234567890_abc",
   "bilibili": {
     "title": "视频标题",
     "description": "视频简介",
@@ -252,6 +253,7 @@ POST /api/publish
 |------|------|------|------|
 | `videoPath` | string | 是 | 待发布视频的绝对路径 |
 | `platforms` | string[] | 是 | 发布平台列表，支持 `"bilibili"` 和 `"douyin"` |
+| `taskId` | string | 否 | 关联的任务ID，发布成功后自动更新任务发布状态 |
 | `bilibili` | object | 否 | B站发布配置，包含 `title`、`description`、`tags` |
 | `douyin` | object | 否 | 抖音发布配置，包含 `title`、`description` |
 | `cdpEndpoint` | string | 否 | Chrome CDP WebSocket 地址，不传则自动发现 |
