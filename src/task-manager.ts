@@ -78,12 +78,14 @@ function generateTaskId(): string {
 
 export function createTask(
   originalUrl: string,
+  requirement?: string,
   initialStatus?: Partial<PublishTask>
 ): PublishTask {
   const now = Date.now();
   const newTask: PublishTask = {
     id: generateTaskId(),
     originalUrl,
+    ...(requirement ? { requirement } : {}),
     downloadStatus: initialStatus?.downloadStatus || {
       video: false,
       subtitles: false,

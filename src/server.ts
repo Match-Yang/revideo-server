@@ -259,12 +259,12 @@ app.post("/api/publish", async (req, res) => {
 // Create a new publish task
 app.post("/api/tasks", (req, res) => {
   try {
-    const { originalUrl, initialStatus } = req.body as AddTaskRequest;
+    const { originalUrl, requirement, initialStatus } = req.body as AddTaskRequest;
     if (!originalUrl) {
       res.status(400).json({ error: "originalUrl is required" });
       return;
     }
-    const task = createTask(originalUrl, initialStatus);
+    const task = createTask(originalUrl, requirement, initialStatus);
     res.json({ success: true, task });
   } catch (err) {
     console.error("[Tasks API] Error creating task:", err);

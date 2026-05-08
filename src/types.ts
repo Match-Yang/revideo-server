@@ -70,6 +70,7 @@ export type RenderStatus = "pending" | "rendering" | "completed" | "failed";
 export interface PublishTask {
   id: string;
   originalUrl: string;
+  requirement?: string;
   downloadStatus: DownloadStatus;
   translationStatus: TranslationStatus;
   renderStatus: RenderStatus;
@@ -85,6 +86,7 @@ export interface TasksData {
 
 export interface AddTaskRequest {
   originalUrl: string;
+  requirement?: string;
   initialStatus?: Partial<PublishTask>;
 }
 
