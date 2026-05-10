@@ -95,7 +95,7 @@ export interface UpdateTaskRequest {
   updates: Partial<
     Pick<
       PublishTask,
-      "downloadStatus" | "translationStatus" | "renderStatus" | "publishStatus"
+      "downloadStatus" | "translationStatus"
     >
   >;
 }

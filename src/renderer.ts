@@ -204,7 +204,8 @@ export function getDirByName(name: string): DirInfo | undefined {
 
 export async function render(
   dir: DirInfo,
-  onProgress?: (progress: RenderProgress) => void
+  onProgress?: (progress: RenderProgress) => void,
+  signal?: AbortSignal
 ): Promise<{ output: string; durationSec: number }> {
   const emit = (stage: string, percent: number, message: string) => {
     onProgress?.({ stage, percent, message });
@@ -252,6 +253,7 @@ export async function render(
   const bundleLocation = await bundle({
     entryPoint: path.resolve("./src/index.ts"),
     webpackOverride: enableTailwind,
+    signal,
   });
 
   // Select composition with inputProps (triggers calculateMetadata)
@@ -259,6 +261,7 @@ export async function render(
     serveUrl: bundleLocation,
     id: "VideoComments",
     inputProps,
+    signal,
   });
 
   const totalRenderFrames = composition.durationInFrames;
@@ -299,6 +302,7 @@ export async function render(
     imageFormat: "jpeg",
     overwrite: true,
     onProgress: onRenderProgress,
+    signal,
   });
 
   emit("extracting-cover", 96, "提取封面...");

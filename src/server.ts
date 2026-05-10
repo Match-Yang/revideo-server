@@ -15,7 +15,9 @@ import {
   getTaskProgress,
   cleanupExpiredTasks,
 } from "./task-manager";
-import type { AddTaskRequest, UpdateTaskRequest, TaskFilter } from "./types";
+import type { AddTaskRequest, TaskFilter } from "./types";
+
+let currentRender: { name: string; progress: any; abortController?: AbortController } | null = null;
 
 const app = express();
 const PORT = 3001;
@@ -71,30 +73,70 @@ app.post("/api/render-folder", async (req, res) => {
     return;
   }
 
+  if (currentRender) {
+    const msg = currentRender.name === dir.name
+      ? "该视频正在渲染，请勿重复请求"
+      : "已有任务正在渲染中，请等待完成后再试";
+    res.status(409).json({ error: msg, currentRender });
+    return;
+  }
+
+  // 检查输出文件是否已存在
+  const existingOutput = path.join(process.cwd(), "out", `${dir.name}.mp4`);
+  if (fs.existsSync(existingOutput) && !req.body?.force) {
+    res.status(409).json({ error: "该视频已有渲染输出文件，如需重新渲染请添加 force: true 参数", outputPath: existingOutput });
+    return;
+  }
+
+  const abortController = new AbortController();
+  currentRender = { name: dir.name, progress: null, abortController };
   console.log(`[Agent API] Rendering: ${dir.path}`);
 
-  if (isSSERequest(req)) {
-    const sse = setupSSE(res);
-    try {
-      const result = await render(dir, (p) => sse.sendProgress(p));
-      const outputPath = path.resolve(process.cwd(), result.output);
-      console.log(`[Agent API] Done: ${outputPath}`);
-      sse.sendEvent("done", { outputPath });
-    } catch (err: any) {
-      console.error(`[Agent API] Error: ${err?.message || err}`);
-      sse.sendEvent("error", { error: err?.message || String(err) });
+  const taskId = req.body?.taskId as string | undefined;
+  if (taskId) updateTask(taskId, { renderStatus: "rendering" });
+
+  try {
+    if (isSSERequest(req)) {
+      const sse = setupSSE(res);
+      try {
+        const result = await render(dir, (p) => { currentRender!.progress = p; sse.sendProgress(p); }, abortController.signal);
+        const outputPath = path.resolve(process.cwd(), result.output);
+        console.log(`[Agent API] Done: ${outputPath}`);
+        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        sse.sendEvent("done", { outputPath });
+      } catch (err: any) {
+        if (abortController.signal.aborted) {
+          console.log(`[Agent API] Render stopped: ${dir.name}`);
+          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          sse.sendEvent("stopped", { message: "渲染已停止" });
+        } else {
+          console.error(`[Agent API] Error: ${err?.message || err}`);
+          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          sse.sendEvent("error", { error: err?.message || String(err) });
+        }
+      }
+      sse.end();
+    } else {
+      try {
+        const result = await render(dir, (p) => { currentRender!.progress = p; }, abortController.signal);
+        const outputPath = path.resolve(process.cwd(), result.output);
+        console.log(`[Agent API] Done: ${outputPath}`);
+        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        res.json({ outputPath });
+      } catch (err: any) {
+        if (abortController.signal.aborted) {
+          console.log(`[Agent API] Render stopped: ${dir.name}`);
+          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          res.json({ stopped: true });
+        } else {
+          console.error(`[Agent API] Error: ${err?.message || err}`);
+          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          res.status(500).json({ error: err?.message || String(err) });
+        }
+      }
     }
-    sse.end();
-  } else {
-    try {
-      const result = await render(dir);
-      const outputPath = path.resolve(process.cwd(), result.output);
-      console.log(`[Agent API] Done: ${outputPath}`);
-      res.json({ outputPath });
-    } catch (err: any) {
-      console.error(`[Agent API] Error: ${err?.message || err}`);
-      res.status(500).json({ error: err?.message || String(err) });
-    }
+  } finally {
+    currentRender = null;
   }
 });
 
@@ -164,23 +206,78 @@ app.post("/api/render/:dirName", async (req, res) => {
     return;
   }
 
-  if (isSSERequest(req)) {
-    const sse = setupSSE(res);
-    try {
-      const result = await render(dir, (p) => sse.sendProgress(p));
-      sse.sendEvent("done", { success: true, output: result.output, durationSec: result.durationSec });
-    } catch (err: any) {
-      sse.sendEvent("error", { error: err?.message || String(err) });
-    }
-    sse.end();
-  } else {
-    try {
-      const result = await render(dir);
-      res.json({ success: true, output: result.output, durationSec: result.durationSec });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || String(err) });
-    }
+  if (currentRender) {
+    const msg = currentRender.name === dirName
+      ? "该视频正在渲染，请勿重复请求"
+      : "已有任务正在渲染中，请等待完成后再试";
+    res.status(409).json({ error: msg, currentRender });
+    return;
   }
+
+  // 检查输出文件是否已存在
+  const existingOutput = path.join(process.cwd(), "out", `${dirName}.mp4`);
+  if (fs.existsSync(existingOutput) && !req.body?.force) {
+    res.status(409).json({ error: "该视频已有渲染输出文件，如需重新渲染请添加 force: true 参数", outputPath: existingOutput });
+    return;
+  }
+
+  const abortController = new AbortController();
+  currentRender = { name: dirName, progress: null, abortController };
+
+  const taskId = req.body?.taskId as string | undefined;
+  if (taskId) updateTask(taskId, { renderStatus: "rendering" });
+
+  try {
+    if (isSSERequest(req)) {
+      const sse = setupSSE(res);
+      try {
+        const result = await render(dir, (p) => { currentRender!.progress = p; sse.sendProgress(p); }, abortController.signal);
+        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        sse.sendEvent("done", { success: true, output: result.output, durationSec: result.durationSec });
+      } catch (err: any) {
+        if (abortController.signal.aborted) {
+          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          sse.sendEvent("stopped", { message: "渲染已停止" });
+        } else {
+          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          sse.sendEvent("error", { error: err?.message || String(err) });
+        }
+      }
+      sse.end();
+    } else {
+      try {
+        const result = await render(dir, (p) => { currentRender!.progress = p; }, abortController.signal);
+        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        res.json({ success: true, output: result.output, durationSec: result.durationSec });
+      } catch (err: any) {
+        if (abortController.signal.aborted) {
+          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          res.json({ stopped: true });
+        } else {
+          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          res.status(500).json({ error: err?.message || String(err) });
+        }
+      }
+    }
+  } finally {
+    currentRender = null;
+  }
+});
+
+// ============================================================
+// Agent API: stop current rendering
+// POST /api/render-stop
+// ============================================================
+app.post("/api/render-stop", (_req, res) => {
+  if (!currentRender) {
+    res.status(404).json({ error: "当前没有正在渲染的任务" });
+    return;
+  }
+  const name = currentRender.name;
+  currentRender.abortController?.abort();
+  currentRender = null;
+  console.log(`[Render Stop] Stopped: ${name}`);
+  res.json({ success: true, message: `已停止渲染: ${name}` });
 });
 
 // ============================================================
@@ -323,12 +420,20 @@ app.get("/api/tasks/:taskId", (req, res) => {
   }
 });
 
-// Update a task
+// Update a task (only downloadStatus and translationStatus; renderStatus/publishStatus are managed internally)
 app.put("/api/tasks/:taskId", (req, res) => {
   try {
-    const { updates } = req.body as UpdateTaskRequest;
-    if (!updates) {
+    const raw = req.body?.updates;
+    if (!raw) {
       res.status(400).json({ error: "updates field is required" });
+      return;
+    }
+    const { downloadStatus, translationStatus } = raw;
+    const updates: any = {};
+    if (downloadStatus) updates.downloadStatus = downloadStatus;
+    if (translationStatus) updates.translationStatus = translationStatus;
+    if (!Object.keys(updates).length) {
+      res.status(400).json({ error: "Only downloadStatus and translationStatus can be updated externally" });
       return;
     }
     const task = updateTask(req.params.taskId, updates);

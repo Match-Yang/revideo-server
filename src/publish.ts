@@ -338,7 +338,19 @@ async function publishBilibili(
             await coverInputs[0].uploadFile(coverPath);
             console.log('[Cover] Uploaded cover via file input');
             onProgress({ stage: "filling", percent: 62, message: "封面上传中..." });
-            await sleep(3000);
+            // Wait for cover image to load in editor (blob preview appears)
+            await page.waitForFunction(
+              () => {
+                const imgs = document.querySelectorAll('.cover-editor img, .cover-crop-container img, [class*="cover-editor"] img');
+                return Array.from(imgs).some(i => {
+                  const src = (i as HTMLImageElement).src;
+                  return src.startsWith('blob:') && (i as HTMLImageElement).naturalWidth > 0;
+                });
+              },
+              { timeout: 30000 }
+            ).catch(() => {});
+            // Extra wait for server-side processing before clicking confirm
+            await sleep(5000);
           } else {
             console.log('[Cover] No image file input found, cannot upload cover');
           }
@@ -352,7 +364,20 @@ async function publishBilibili(
             return 'not found';
           });
           console.log('[Cover] Close dialog:', confirmResult);
-          await sleep(1000);
+          // Wait for dialog close and cover to be applied to form
+          await page.waitForFunction(
+            () => {
+              const coverImg = document.querySelector('.cover-img');
+              if (!coverImg) return false;
+              const bg = window.getComputedStyle(coverImg).backgroundImage;
+              return bg && bg !== 'none' && bg.includes('http');
+            },
+            { timeout: 15000 }
+          ).then(() => {
+            console.log('[Cover] Cover confirmed on form');
+          }).catch(() => {
+            console.log('[Cover] Could not confirm cover on form, proceeding anyway');
+          });
         } else {
           console.log('[Cover] No 封面设置 button found, B站 will use auto-generated cover');
         }
@@ -367,32 +392,44 @@ async function publishBilibili(
 
     // Submit - click the submit button
     onProgress({ stage: "submitting", percent: 65, message: "正在提交投稿..." });
-    const currentUrl = page.url();
     await page.evaluate(() => {
       const btn = document.querySelector("span.submit-add");
       if (btn) (btn as HTMLElement).click();
     });
 
-    // Wait for success - either "稿件投递成功" text or URL change (redirect to management)
+    // Poll for submit result: handle both quick submit and slow upload scenarios.
+    // For large videos, B站 shows "等待视频上传完后会自动提交，请勿关闭当前页面"
+    // after clicking submit — we must wait until upload finishes and "稿件投递成功" appears.
     onProgress({ stage: "submitting", percent: 75, message: "等待投稿确认..." });
-    try {
-      await Promise.race([
-        page.waitForFunction(
-          () => document.body.innerText.includes("稿件投递成功"),
-          { timeout: 30000 }
-        ),
-        page.waitForNavigation({ timeout: 30000 }),
-      ]);
-      console.log('[Submit] Navigation or success detected');
-    } catch (e) {
-      // Check if URL changed (might have navigated to management page)
-      const newUrl = page.url();
-      if (newUrl !== currentUrl) {
-        console.log('[Submit] URL changed to:', newUrl);
-      } else {
-        console.log('[Submit] No navigation detected, checking submit button state...');
+    const SUBMIT_POLL_INTERVAL = 5000;
+    const submitStart = Date.now();
+
+    while (true) {
+      const state = await page.evaluate(() => {
+        const bodyText = document.body.innerText;
+        if (bodyText.includes("稿件投递成功")) return "success" as const;
+        if (bodyText.includes("等待视频上传完后会自动提交")) return "uploading" as const;
+        if (bodyText.includes("视频上传中") || bodyText.includes("正在上传")) return "uploading" as const;
+        return "unknown" as const;
+      });
+
+      const elapsed = Math.round((Date.now() - submitStart) / 1000);
+      console.log(`[Submit] [${elapsed}s] state=${state}`);
+
+      if (state === "success") {
+        console.log(`[Submit] 稿件投递成功 after ${elapsed}s`);
+        submitted = true;
+        break;
       }
+
+      if (state === "uploading") {
+        onProgress({ stage: "submitting", percent: 75, message: `视频上传中，等待完成... (${elapsed}s)` });
+      }
+
+      await sleep(SUBMIT_POLL_INTERVAL);
     }
+
+    // Loop exits only when "稿件投递成功" is detected
 
     // Disable beforeunload handler to prevent "确定要离开吗" dialog on disconnect
     await page.evaluate(() => {
