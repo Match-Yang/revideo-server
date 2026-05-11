@@ -14,10 +14,11 @@ import {
   isTaskComplete,
   getTaskProgress,
   cleanupExpiredTasks,
+  syncRenderStatus,
 } from "./task-manager";
 import type { AddTaskRequest, TaskFilter } from "./types";
 
-let currentRender: { name: string; progress: any; abortController?: AbortController } | null = null;
+let currentRender: { name: string; progress: any; abortController?: AbortController; taskId?: string } | null = null;
 
 const app = express();
 const PORT = 3001;
@@ -107,48 +108,48 @@ app.post("/api/render-folder", async (req, res) => {
   }
 
   const abortController = new AbortController();
-  currentRender = { name: dir.name, progress: null, abortController };
+  const taskId = dir.name;
+  currentRender = { name: dir.name, progress: null, abortController, taskId };
   console.log(`[Agent API] Rendering: ${dir.path}`);
 
-  const taskId = req.body?.taskId as string | undefined;
-  if (taskId) updateTask(taskId, { renderStatus: "rendering" });
+  updateTask(taskId, { renderStatus: "rendering" });
 
   try {
     if (isSSERequest(req)) {
       const sse = setupSSE(res);
       try {
-        const result = await render(dir, (p) => { currentRender!.progress = p; sse.sendProgress(p); }, abortController.signal);
+        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; sse.sendProgress(p); }, abortController.signal);
         const outputPath = path.resolve(process.cwd(), result.output);
         console.log(`[Agent API] Done: ${outputPath}`);
-        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        updateTask(taskId, { renderStatus: "completed" });
         sse.sendEvent("done", { outputPath });
       } catch (err: any) {
         if (abortController.signal.aborted) {
           console.log(`[Agent API] Render stopped: ${dir.name}`);
-          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          updateTask(taskId, { renderStatus: "pending" });
           sse.sendEvent("stopped", { message: "渲染已停止" });
         } else {
           console.error(`[Agent API] Error: ${err?.message || err}`);
-          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          updateTask(taskId, { renderStatus: "failed" });
           sse.sendEvent("error", { error: err?.message || String(err) });
         }
       }
       sse.end();
     } else {
       try {
-        const result = await render(dir, (p) => { currentRender!.progress = p; }, abortController.signal);
+        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; }, abortController.signal);
         const outputPath = path.resolve(process.cwd(), result.output);
         console.log(`[Agent API] Done: ${outputPath}`);
-        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        updateTask(taskId, { renderStatus: "completed" });
         res.json({ outputPath });
       } catch (err: any) {
         if (abortController.signal.aborted) {
           console.log(`[Agent API] Render stopped: ${dir.name}`);
-          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          updateTask(taskId, { renderStatus: "pending" });
           res.json({ stopped: true });
         } else {
           console.error(`[Agent API] Error: ${err?.message || err}`);
-          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          updateTask(taskId, { renderStatus: "failed" });
           res.status(500).json({ error: err?.message || String(err) });
         }
       }
@@ -240,39 +241,39 @@ app.post("/api/render/:dirName", async (req, res) => {
   }
 
   const abortController = new AbortController();
-  currentRender = { name: dirName, progress: null, abortController };
+  const taskId = dirName;
+  currentRender = { name: dirName, progress: null, abortController, taskId };
 
-  const taskId = req.body?.taskId as string | undefined;
-  if (taskId) updateTask(taskId, { renderStatus: "rendering" });
+  updateTask(taskId, { renderStatus: "rendering" });
 
   try {
     if (isSSERequest(req)) {
       const sse = setupSSE(res);
       try {
-        const result = await render(dir, (p) => { currentRender!.progress = p; sse.sendProgress(p); }, abortController.signal);
-        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; sse.sendProgress(p); }, abortController.signal);
+        updateTask(taskId, { renderStatus: "completed" });
         sse.sendEvent("done", { success: true, output: result.output, durationSec: result.durationSec });
       } catch (err: any) {
         if (abortController.signal.aborted) {
-          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          updateTask(taskId, { renderStatus: "pending" });
           sse.sendEvent("stopped", { message: "渲染已停止" });
         } else {
-          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          updateTask(taskId, { renderStatus: "failed" });
           sse.sendEvent("error", { error: err?.message || String(err) });
         }
       }
       sse.end();
     } else {
       try {
-        const result = await render(dir, (p) => { currentRender!.progress = p; }, abortController.signal);
-        if (taskId) updateTask(taskId, { renderStatus: "completed" });
+        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; }, abortController.signal);
+        updateTask(taskId, { renderStatus: "completed" });
         res.json({ success: true, output: result.output, durationSec: result.durationSec });
       } catch (err: any) {
         if (abortController.signal.aborted) {
-          if (taskId) updateTask(taskId, { renderStatus: "pending" });
+          updateTask(taskId, { renderStatus: "pending" });
           res.json({ stopped: true });
         } else {
-          if (taskId) updateTask(taskId, { renderStatus: "failed" });
+          updateTask(taskId, { renderStatus: "failed" });
           res.status(500).json({ error: err?.message || String(err) });
         }
       }
@@ -292,8 +293,10 @@ app.post("/api/render-stop", (_req, res) => {
     return;
   }
   const name = currentRender.name;
+  const taskId = currentRender.taskId;
   currentRender.abortController?.abort();
   currentRender = null;
+  if (taskId) updateTask(taskId, { renderStatus: "pending" });
   console.log(`[Render Stop] Stopped: ${name}`);
   res.json({ success: true, message: `已停止渲染: ${name}` });
 });
@@ -320,7 +323,7 @@ app.post("/api/publish", async (req, res) => {
 
   console.log(`[Publish API] Publishing ${body.videoPath} to ${targetPlatforms.join(", ")}`);
 
-  const taskId = (body as any).taskId || path.basename(body.videoPath, path.extname(body.videoPath));
+  const taskId = path.basename(body.videoPath, path.extname(body.videoPath));
 
   const markTaskPublished = async (results: Record<string, { success: boolean; error?: string }>) => {
     const task = getTaskById(taskId);
@@ -510,6 +513,7 @@ app.post("/api/tasks/cleanup", (_req, res) => {
 });
 
 app.listen(PORT, () => {
+  syncRenderStatus();
   console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
   console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }`);
   console.log(`  Agent API: POST /api/publish        { "videoPath": "...", "platforms": ["bilibili","douyin"] }`);

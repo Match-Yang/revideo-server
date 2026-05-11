@@ -114,13 +114,23 @@ export function syncRenderStatus(): number {
 
   // Sync render status for all video-based tasks
   for (const task of byVideoId.values()) {
-    if (task.renderStatus !== "completed") {
+    if (task.renderStatus === "pending") {
       const outputPath = path.join(OUT_DIR, `${task.id}.mp4`);
       if (fs.existsSync(outputPath)) {
         task.renderStatus = "completed";
         task.updatedAt = Date.now();
         fixed++;
       }
+    } else if (task.renderStatus === "rendering") {
+      // 渲染中断（进程崩溃等），输出文件可能在也可能不在
+      const outputPath = path.join(OUT_DIR, `${task.id}.mp4`);
+      if (fs.existsSync(outputPath)) {
+        task.renderStatus = "completed";
+      } else {
+        task.renderStatus = "failed";
+      }
+      task.updatedAt = Date.now();
+      fixed++;
     }
   }
 
@@ -391,7 +401,6 @@ export function getTaskStatistics(): TaskStatistics {
     } else {
       switch (task.renderStatus) {
         case "pending":
-        case "queued":
           stats.pending++;
           break;
         case "rendering":
