@@ -132,8 +132,6 @@ export function preparePublicDir(dir: DirInfo) {
   }
 }
 
-const HAS_ZH = /[\u4e00-\u9fff]/;
-
 async function downloadAvatars(): Promise<void> {
   const commentsPath = path.join(PUBLIC_DIR, "comments.json");
   if (!fs.existsSync(commentsPath)) {
@@ -144,10 +142,13 @@ async function downloadAvatars(): Promise<void> {
   const data = JSON.parse(fs.readFileSync(commentsPath, "utf-8"));
   const allComments: Comment[] = data.comments || [];
 
-  // Only download avatars for comments with Chinese text
+  // Download avatars for ALL comments (headless browser can't access remote URLs)
   const flat = allComments.flatMap((c) => [c, ...(c.replies || [])]);
-  const zhComments = flat.filter((c) => HAS_ZH.test(c.text || ""));
-  console.log(`[Avatar] ${flat.length} total, ${zhComments.length} with Chinese text`);
+  const needDownload = flat.filter((c) => {
+    const url = c.author_thumbnail;
+    return url && url.startsWith("http");
+  });
+  console.log(`[Avatar] ${flat.length} total, ${needDownload.length} need download`);
 
   const avatarsDir = path.join(PUBLIC_DIR, "avatars");
   fs.mkdirSync(avatarsDir, { recursive: true });
@@ -157,8 +158,8 @@ async function downloadAvatars(): Promise<void> {
   let failed = 0;
   let firstError = "";
 
-  for (let i = 0; i < zhComments.length; i += BATCH) {
-    const batch = zhComments.slice(i, i + BATCH);
+  for (let i = 0; i < needDownload.length; i += BATCH) {
+    const batch = needDownload.slice(i, i + BATCH);
     await Promise.all(
       batch.map((comment) => {
         const url = comment.author_thumbnail;
@@ -186,7 +187,7 @@ async function downloadAvatars(): Promise<void> {
           });
       })
     );
-    console.log(`[Avatar] ${Math.min(i + BATCH, zhComments.length)}/${zhComments.length} (${downloaded} ok, ${failed} fail)`);
+    console.log(`[Avatar] ${Math.min(i + BATCH, needDownload.length)}/${needDownload.length} (${downloaded} ok, ${failed} fail)`);
   }
 
   fs.writeFileSync(commentsPath, JSON.stringify(data));
@@ -284,7 +285,6 @@ export async function render(
     if (stitchStage === "muxing") {
       emit("muxing", overallPercent, `合成音轨 ${pct}%`);
     } else if (encodedFrames === 0) {
-      // encodedFrames=0 means frames are being rendered but not yet encoded
       emit("rendering", overallPercent, `渲染帧 ${pct}% (${renderedFrames}/${totalRenderFrames})`);
     } else {
       emit("encoding", overallPercent, `编码视频 ${pct}% (${encodedFrames}/${totalRenderFrames})`);
@@ -303,6 +303,9 @@ export async function render(
     overwrite: true,
     onProgress: onRenderProgress,
     signal,
+    chromiumOptions: {
+      args: [`--proxy-server=${PROXY}`],
+    },
   });
 
   emit("extracting-cover", 96, "提取封面...");

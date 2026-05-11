@@ -65,7 +65,7 @@ export interface PublishStatus {
   douyin?: PlatformPublishStatus;
 }
 
-export type RenderStatus = "pending" | "rendering" | "completed" | "failed";
+export type RenderStatus = "pending" | "queued" | "rendering" | "completed" | "failed";
 
 export interface PublishTask {
   id: string;
@@ -91,7 +91,7 @@ export interface AddTaskRequest {
 }
 
 export interface UpdateTaskRequest {
-  taskId: string;
+  videoId: string;
   updates: Partial<
     Pick<
       PublishTask,

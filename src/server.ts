@@ -60,6 +60,24 @@ app.use("/out", express.static(outDir));
 // Body: { "folder": "/absolute/path/to/folder" }
 // Returns: { "outputPath": "/full/system/path/to/output.mp4" }
 // ============================================================
+
+// TEST: Direct openBrowser in Express handler
+app.get("/api/test-browser", async (req, res) => {
+  const fs = await import("fs");
+  try {
+    fs.default.appendFileSync("/tmp/express-ob-test.log", "Handler called\n");
+    const { openBrowser } = await import("@remotion/renderer");
+    fs.default.appendFileSync("/tmp/express-ob-test.log", "Calling openBrowser...\n");
+    const browser = await openBrowser("chrome", { logLevel: "info" });
+    fs.default.appendFileSync("/tmp/express-ob-test.log", "SUCCESS\n");
+    await browser.close({ silent: true });
+    res.json({ success: true });
+  } catch(e) {
+    fs.default.appendFileSync("/tmp/express-ob-test.log", "FAIL: " + e.message.substring(0, 2000) + "\n");
+    res.status(500).json({ error: e.message.substring(0, 500) });
+  }
+});
+
 app.post("/api/render-folder", async (req, res) => {
   const { folder } = req.body;
   if (!folder || typeof folder !== "string") {
@@ -289,22 +307,30 @@ app.post("/api/render-stop", (_req, res) => {
 app.post("/api/publish", async (req, res) => {
   const body = req.body as PublishRequest;
 
-  if (!body.videoPath || !body.platforms?.length) {
-    res.status(400).json({ error: "Missing videoPath or platforms" });
+  if (!body.videoPath) {
+    res.status(400).json({ error: "Missing videoPath" });
     return;
   }
 
-  console.log(`[Publish API] Publishing ${body.videoPath} to ${body.platforms.join(", ")}`);
+  const targetPlatforms = (body.bilibili ? ["bilibili"] : []).concat(body.douyin ? ["douyin"] : []);
+  if (!targetPlatforms.length) {
+    res.status(400).json({ error: "请至少提供 bilibili 或 douyin 的发布配置" });
+    return;
+  }
+
+  console.log(`[Publish API] Publishing ${body.videoPath} to ${targetPlatforms.join(", ")}`);
+
+  const taskId = (body as any).taskId || path.basename(body.videoPath, path.extname(body.videoPath));
 
   const markTaskPublished = async (results: Record<string, { success: boolean; error?: string }>) => {
-    if (!body.taskId) return;
-    const task = getTaskById(body.taskId);
+    const task = getTaskById(taskId);
     if (!task) {
-      console.warn(`[Publish API] Task ${body.taskId} not found, skipping status update`);
+      console.warn(`[Publish API] Task ${taskId} not found, skipping status update`);
       return;
     }
 
     const publishStatus = { ...task.publishStatus };
+    let changed = false;
     if (results.bilibili?.success) {
       publishStatus.bilibili = {
         title: body.bilibili?.title || "",
@@ -313,6 +339,7 @@ app.post("/api/publish", async (req, res) => {
         category: body.bilibili?.category,
         published: true,
       };
+      changed = true;
     }
     if (results.douyin?.success) {
       publishStatus.douyin = {
@@ -320,10 +347,13 @@ app.post("/api/publish", async (req, res) => {
         description: body.douyin?.description || "",
         published: true,
       };
+      changed = true;
     }
 
-    updateTask(body.taskId, { publishStatus });
-    console.log(`[Publish API] Task ${body.taskId} publish status updated`);
+    if (changed) {
+      updateTask(taskId, { publishStatus });
+      console.log(`[Publish API] Task ${taskId} publish status updated`);
+    }
   };
 
   if (isSSERequest(req)) {

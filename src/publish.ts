@@ -401,6 +401,7 @@ async function publishBilibili(
     // For large videos, B站 shows "等待视频上传完后会自动提交，请勿关闭当前页面"
     // after clicking submit — we must wait until upload finishes and "稿件投递成功" appears.
     onProgress({ stage: "submitting", percent: 75, message: "等待投稿确认..." });
+    let submitted = false;
     const SUBMIT_POLL_INTERVAL = 5000;
     const submitStart = Date.now();
 
@@ -587,18 +588,16 @@ async function publishDouyin(
 
 export interface PublishRequest {
   videoPath: string;
-  platforms: ("bilibili" | "douyin")[];
   bilibili?: { title: string; description: string; tags?: string[]; category?: string };
   douyin?: { title: string; description: string };
   cdpEndpoint?: string;
-  taskId?: string;
 }
 
 export async function publish(
   req: PublishRequest,
   onProgress: (p: PublishProgress) => void
 ) {
-  const { videoPath, platforms, cdpEndpoint } = req;
+  const { videoPath, cdpEndpoint } = req;
 
   // Validate video file
   const fs = await import("fs");
@@ -606,8 +605,13 @@ export async function publish(
     throw new Error(`视频文件不存在: ${videoPath}`);
   }
 
-  if (!platforms || platforms.length === 0) {
-    throw new Error("请指定至少一个发布平台");
+  // Detect platforms from provided configs
+  const platforms: ("bilibili" | "douyin")[] = [];
+  if (req.bilibili) platforms.push("bilibili");
+  if (req.douyin) platforms.push("douyin");
+
+  if (platforms.length === 0) {
+    throw new Error("请至少提供 bilibili 或 douyin 的发布配置");
   }
 
   const results: Record<string, { success: boolean; error?: string }> = {};

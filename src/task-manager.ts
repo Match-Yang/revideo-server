@@ -12,7 +12,15 @@ import type {
 } from "./types";
 
 const TASKS_FILE = path.join(process.cwd(), "data", "tasks.json");
+const OUT_DIR = path.join(process.cwd(), "out");
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+const VIDEO_ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/))([^&?\s]+)/;
+
+export function extractVideoId(url: string): string | null {
+  const m = url.match(VIDEO_ID_RE);
+  return m ? m[1] : null;
+}
 
 // ============================================================
 // 任务存储管理
@@ -69,21 +77,81 @@ export function cleanupExpiredTasks(): number {
 }
 
 // ============================================================
-// 任务操作
+// 启动时同步: 迁移旧 task ID → video ID + 修正 renderStatus
 // ============================================================
 
-function generateTaskId(): string {
-  return `task_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+export function syncRenderStatus(): number {
+  const data = loadTasks();
+  let migrated = 0;
+  let fixed = 0;
+
+  const byVideoId = new Map<string, PublishTask>();
+
+  for (const task of data.tasks) {
+    const videoId = extractVideoId(task.originalUrl);
+    if (!videoId) continue;
+
+    // Migrate old-format ID to video ID
+    if (task.id !== videoId) {
+      task.id = videoId;
+      migrated++;
+    }
+
+    // Deduplicate: keep the most recently updated, merge publishStatus
+    const existing = byVideoId.get(videoId);
+    if (!existing || task.updatedAt > existing.updatedAt) {
+      if (existing) {
+        task.publishStatus = { ...existing.publishStatus, ...task.publishStatus };
+      }
+      byVideoId.set(videoId, task);
+    } else {
+      existing.publishStatus = { ...task.publishStatus, ...existing.publishStatus };
+    }
+  }
+
+  // Tasks without video ID (keep as-is)
+  const noVideoId = data.tasks.filter((t) => !extractVideoId(t.originalUrl));
+
+  // Sync render status for all video-based tasks
+  for (const task of byVideoId.values()) {
+    if (task.renderStatus !== "completed") {
+      const outputPath = path.join(OUT_DIR, `${task.id}.mp4`);
+      if (fs.existsSync(outputPath)) {
+        task.renderStatus = "completed";
+        task.updatedAt = Date.now();
+        fixed++;
+      }
+    }
+  }
+
+  data.tasks = [...Array.from(byVideoId.values()), ...noVideoId];
+  saveTasks(data);
+
+  if (migrated > 0) console.log(`[TaskManager] Migrated ${migrated} task(s) to video ID`);
+  if (fixed > 0) console.log(`[TaskManager] Synced ${fixed} task(s) renderStatus → completed`);
+  return fixed;
 }
+
+// ============================================================
+// 任务操作 (task ID = video ID)
+// ============================================================
 
 export function createTask(
   originalUrl: string,
   requirement?: string,
   initialStatus?: Partial<PublishTask>
 ): PublishTask {
+  const videoId = extractVideoId(originalUrl);
+  if (!videoId) {
+    throw new Error(`Cannot extract video ID from URL: ${originalUrl}`);
+  }
+
   const now = Date.now();
-  const newTask: PublishTask = {
-    id: generateTaskId(),
+  const data = loadTasks();
+  const existingIndex = data.tasks.findIndex((t) => t.id === videoId);
+
+  const task: PublishTask = {
+    id: videoId,
     originalUrl,
     ...(requirement ? { requirement } : {}),
     downloadStatus: initialStatus?.downloadStatus || {
@@ -97,15 +165,26 @@ export function createTask(
     },
     renderStatus: initialStatus?.renderStatus || "pending",
     publishStatus: initialStatus?.publishStatus || {},
-    createdAt: now,
+    createdAt: existingIndex >= 0 ? data.tasks[existingIndex].createdAt : now,
     updatedAt: now,
   };
 
-  const data = loadTasks();
-  data.tasks.push(newTask);
-  saveTasks(data);
+  // Upsert: merge with existing task if present
+  if (existingIndex >= 0) {
+    const existing = data.tasks[existingIndex];
+    task.publishStatus = { ...existing.publishStatus, ...task.publishStatus };
+    if (!initialStatus?.downloadStatus) task.downloadStatus = existing.downloadStatus;
+    if (!initialStatus?.translationStatus) task.translationStatus = existing.translationStatus;
+    if (!initialStatus?.renderStatus && existing.renderStatus !== "pending") {
+      task.renderStatus = existing.renderStatus;
+    }
+    data.tasks[existingIndex] = task;
+  } else {
+    data.tasks.push(task);
+  }
 
-  return newTask;
+  saveTasks(data);
+  return task;
 }
 
 export function getAllTasks(filter?: TaskFilter): PublishTask[] {
@@ -195,6 +274,14 @@ export function deleteTask(taskId: string): boolean {
     return true;
   }
   return false;
+}
+
+export function clearAllTasks(): number {
+  const data = loadTasks();
+  const count = data.tasks.length;
+  data.tasks = [];
+  saveTasks(data);
+  return count;
 }
 
 // ============================================================
@@ -304,6 +391,7 @@ export function getTaskStatistics(): TaskStatistics {
     } else {
       switch (task.renderStatus) {
         case "pending":
+        case "queued":
           stats.pending++;
           break;
         case "rendering":
