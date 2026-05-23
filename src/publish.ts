@@ -97,13 +97,22 @@ async function closePopups(page: Page) {
   // Try multiple rounds to close all popups
   for (let round = 0; round < 3; round++) {
     await page.evaluate(() => {
-      document.querySelectorAll("button").forEach((b) => {
-        const t = b.textContent.trim();
+      // Check both <button> and other clickable elements (div, span, etc.)
+      const allElements = document.querySelectorAll('button, [class*="btn"], [role="button"], div[class*="dialog"] *');
+      const clicked = new Set<string>();
+      allElements.forEach((el) => {
+        const t = el.textContent?.trim();
         if (
-          ["暂不考虑", "知道了", "禁止", "取消", "同意"].includes(t) &&
-          b.offsetHeight > 0
+          t &&
+          ["暂不考虑", "知道了", "禁止", "取消", "同意", "不用了", "继续编辑"].includes(t) &&
+          el.offsetHeight > 0 &&
+          !clicked.has(t)
         ) {
-          (b as HTMLButtonElement).click();
+          // Only click "不用了" (not "继续编辑")
+          if (t !== '继续编辑') {
+            (el as HTMLElement).click();
+            clicked.add(t);
+          }
         }
       });
     });
@@ -150,6 +159,10 @@ async function publishBilibili(
       timeout: 180000
     });
     await sleep(3000);
+
+    // Close any popups BEFORE uploading (e.g. "继续编辑/不用了" dialog)
+    await closePopups(page);
+    await sleep(1000);
 
     onProgress({ stage: "uploading", percent: 10, message: "正在上传视频到B站..." });
     await uploadFile(page, videoPath);
