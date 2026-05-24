@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { translateText } from "../translate/openai-compatible";
+import { translateJSON } from "../translate/openai-compatible";
 import type { JobTarget, RevideoJob, TargetPlatform } from "./types";
 
 function sourceTitle(job: RevideoJob): string {
@@ -21,51 +21,82 @@ function sourceDescription(job: RevideoJob): string {
   return parts.join("\n");
 }
 
-function hasChinese(value: string): boolean {
-  return /[\u3400-\u9fff]/.test(value);
-}
-
 function cleanTitle(value: string): string {
   return value
-    .replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, "")
+    .replace(/^["'""''\s]+|["'""''\s]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-async function localizedTitle(job: RevideoJob): Promise<string> {
+interface BilibiliDraft {
+  title: string;
+  description: string;
+  tags: string[];
+  category: string;
+}
+
+const BILIBILI_PROMPT = [
+  "你是 B 站视频投稿文案生成助手。",
+  "根据用户提供的原始视频标题，生成以下内容，以 JSON 格式返回：",
+  `{`,
+  `  "title": "极具吸引力的 B 站风格中文标题，不超过80字",`,
+  `  "description": "简短有吸引力的视频简介，1-3句话，抛出有对立性的问题引导观众讨论",`,
+  `  "tags": ["标签1", "标签2", "标签3", "标签4", "标签5"],`,
+  `  "category": "最匹配的 B 站视频分区名称"`,
+  `}`,
+  "",
+  "要求：",
+  "- 标题要接地气、有网感，能引起好奇心（如：外国网友：喂！你的购置税在你前面跑啊！）",
+  "- 简介要抛出有争议或对立性的问题，激发评论区讨论",
+  "- tags 共 5 个，与标题和简介内容高度相关",
+  "- category 必须是以下分区之一：影视、娱乐、音乐、舞蹈、动画、绘画、鬼畜、游戏、资讯、知识、人工智能、科技数码、汽车、时尚美妆、家装房产、户外潮流、健身、体育运动、手工、美食、小剧场、旅游出行、三农、动物、亲子、健康、情感、vlog、生活兴趣、生活经验",
+  "- 只输出 JSON，不要输出其他内容",
+].join("\n");
+
+async function generateBilibiliDraft(job: RevideoJob): Promise<Record<string, unknown>> {
   const title = sourceTitle(job);
+  const sourceDesc = sourceDescription(job);
   const targetLanguage = job.options.targetLanguage || "zh-CN";
-  if (/^zh/i.test(targetLanguage) && hasChinese(title)) return title;
-  if (!/^zh/i.test(targetLanguage)) return title;
 
-  const translated = await translateText({
-    text: title,
-    targetLanguage,
-    systemPrompt: [
-      "你是视频平台投稿标题本地化助手。",
-      "把用户给出的视频标题翻译成自然、适合中文视频平台的简体中文标题。",
-      "只输出标题本身，不要解释，不要加引号，不要输出多种版本。",
-      "保留必要品牌名、车型名、专有名词；英文情绪词可转为自然中文表达。",
-      "如果原文已经是中文，原样返回，不要繁简转换，不要润色。",
-      "标题不得包含违法、色情、仇恨、政治煽动、诈骗引流内容；如原文含高风险内容，改为中性安全表达。",
-    ].join("\n"),
-  });
+  if (!/^zh/i.test(targetLanguage)) {
+    return { title, description: sourceDesc, tags: ["转载", "海外视频"], category: "生活兴趣" };
+  }
 
-  return cleanTitle(translated) || title;
+  let draft: BilibiliDraft;
+  try {
+    draft = await translateJSON<BilibiliDraft>({
+      text: title,
+      systemPrompt: BILIBILI_PROMPT,
+    });
+  } catch {
+    draft = {
+      title,
+      description: "",
+      tags: ["转载", "海外视频"],
+      category: "生活兴趣",
+    };
+  }
+
+  const cleanDraftTitle = cleanTitle(draft.title) || title;
+  const description = draft.description
+    ? `${draft.description}\n\n${sourceDesc}`
+    : sourceDesc;
+
+  return {
+    title: cleanDraftTitle.slice(0, 80),
+    description,
+    tags: Array.isArray(draft.tags) ? draft.tags.slice(0, 5) : ["转载", "海外视频"],
+    category: draft.category || "生活兴趣",
+  };
 }
 
 export async function generateDraftForPlatform(job: RevideoJob, platform: TargetPlatform): Promise<Record<string, unknown>> {
-  const title = await localizedTitle(job);
-  const description = sourceDescription(job);
-
   if (platform === "bilibili") {
-    return {
-      title: title.slice(0, 80),
-      description,
-      tags: ["转载", "海外视频", "评论"],
-      category: "汽车",
-    };
+    return generateBilibiliDraft(job);
   }
+
+  const title = sourceTitle(job);
+  const description = sourceDescription(job);
 
   if (platform === "douyin") {
     return {
