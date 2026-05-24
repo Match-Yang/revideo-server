@@ -4,6 +4,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
   OffthreadVideo,
+  Loop,
   staticFile,
   continueRender,
   delayRender,
@@ -17,6 +18,7 @@ export const videoCommentsSchema = z.object({
   commentFile: z.string(),
   subtitleFiles: z.array(z.string()),
   durationInFrames: z.number().optional(),
+  sourceVideoDurationInFrames: z.number().optional(),
   isPortrait: z.boolean().optional(),
   videoAspectRatio: z.number().optional(),
 });
@@ -347,6 +349,7 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
   videoFile,
   commentFile,
   subtitleFiles,
+  sourceVideoDurationInFrames,
   isPortrait,
   videoAspectRatio,
 }) => {
@@ -422,7 +425,6 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
   if (isPortrait) {
     // Portrait video → portrait 9:16 canvas, video top half + comments bottom half
     const videoAreaHeight = Math.round(canvasHeight / 2);
-    const commentAreaHeight = canvasHeight - videoAreaHeight;
 
     return (
       <AbsoluteFill style={{ backgroundColor: "#000" }}>
@@ -442,14 +444,18 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
           }}
         >
           {videoSrc && (
-            <OffthreadVideo
-              src={videoSrc}
-              style={{
-                height: "100%",
-                aspectRatio: String(aspectRatio),
-                objectFit: "contain",
-              }}
-            />
+            <Loop durationInFrames={sourceVideoDurationInFrames || 1}>
+              <OffthreadVideo
+                src={videoSrc}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  objectPosition: "center center",
+                  display: "block",
+                }}
+              />
+            </Loop>
           )}
           <SubtitleOverlay cues={subtitles} />
         </div>
@@ -493,14 +499,18 @@ export const VideoComments: React.FC<VideoCommentsProps> = ({
         }}
       >
         {videoSrc && (
-          <OffthreadVideo
-            src={videoSrc}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-            }}
-          />
+          <Loop durationInFrames={sourceVideoDurationInFrames || 1}>
+            <OffthreadVideo
+              src={videoSrc}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                objectPosition: "center center",
+                display: "block",
+              }}
+            />
+          </Loop>
         )}
         <SubtitleOverlay cues={subtitles} />
       </div>

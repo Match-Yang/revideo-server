@@ -44,6 +44,16 @@ async function findOrCreatePage(browser: Browser, urlPattern: string): Promise<P
   return page;
 }
 
+async function createFreshPage(browser: Browser, urlPattern: string): Promise<Page> {
+  const pages = await browser.pages();
+  await Promise.all(
+    pages
+      .filter((p) => p.url().includes(urlPattern))
+      .map((p) => p.close().catch(() => undefined))
+  );
+  return browser.newPage();
+}
+
 async function handleDeclarationModal(page: Page): Promise<boolean> {
   const hasModal = await page.evaluate(() => !!document.querySelector('.semi-modal-content'));
   if (!hasModal) return false;
@@ -55,8 +65,8 @@ async function handleDeclarationModal(page: Page): Promise<boolean> {
       const addon = label.querySelector('.semi-radio-addon');
       if (addon && addon.textContent?.trim() === '内容为个人观点或见解') {
         const input = label.querySelector('input[type="radio"]');
-        if (input) input.click();
-        else label.click();
+        if (input) (input as HTMLInputElement).click();
+        else (label as HTMLElement).click();
         return;
       }
     }
@@ -105,7 +115,7 @@ async function closePopups(page: Page) {
         if (
           t &&
           ["暂不考虑", "知道了", "禁止", "取消", "同意", "不用了", "继续编辑"].includes(t) &&
-          el.offsetHeight > 0 &&
+          (el as HTMLElement).offsetHeight > 0 &&
           !clicked.has(t)
         ) {
           // Only click "不用了" (not "继续编辑")
@@ -149,14 +159,18 @@ async function publishBilibili(
 
   onProgress({ stage: "connecting", percent: 0, message: "正在连接B站..." });
   const browser = await connectBrowser(cdpEndpoint);
+  let page: Page | undefined;
 
   try {
-    const page = await findOrCreatePage(browser, "bilibili");
+    page = await createFreshPage(browser, "bilibili");
 
     onProgress({ stage: "navigating", percent: 5, message: "正在打开B站投稿页..." });
     await page.goto("https://member.bilibili.com/platform/upload/video/frame", {
-      waitUntil: "networkidle2",
+      waitUntil: "domcontentloaded",
       timeout: 180000
+    });
+    await page.waitForSelector('input[type="file"], input.input-val[placeholder*="标题"]', {
+      timeout: 60000,
     });
     await sleep(3000);
 
@@ -194,8 +208,8 @@ async function publishBilibili(
           const setter = Object.getOwnPropertyDescriptor(
             HTMLInputElement.prototype,
             "value"
-          )!.set;
-          setter.call(el, val);
+          )?.set;
+          setter?.call(el, val);
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
         },
@@ -213,7 +227,7 @@ async function publishBilibili(
       await page.evaluate(
         (el: HTMLElement, text: string) => {
           el.focus();
-          document.execCommand("selectAll", false, null);
+          document.execCommand("selectAll", false, undefined);
           document.execCommand("insertText", false, text);
         },
         descEditor,
@@ -233,8 +247,8 @@ async function publishBilibili(
               const setter = Object.getOwnPropertyDescriptor(
                 HTMLInputElement.prototype,
                 "value"
-              )!.set;
-              setter.call(el, val);
+              )?.set;
+              setter?.call(el, val);
               el.dispatchEvent(new Event("input", { bubbles: true }));
             },
             tagInput,
@@ -250,16 +264,35 @@ async function publishBilibili(
     if (options.category) {
       onProgress({ stage: "filling", percent: 52, message: `正在设置分区: ${options.category}...` });
       try {
-        // Click the select-container to open the dropdown
-        const selectContainer = await page.$('.select-container');
-        if (selectContainer) {
-          await selectContainer.click();
+        const clickedContainer = await page.evaluate(() => {
+          const labels = Array.from(document.querySelectorAll("span, div, label"));
+          const label = labels.find((el) => el.textContent?.trim() === "分区");
+          const field =
+            label?.closest(".form-item, .form-group, .upload-form-item, [class*='form']") ||
+            label?.parentElement?.parentElement ||
+            null;
+          const container =
+            field?.querySelector(".select-container, [class*='select-container'], [class*='select-box']") ||
+            null;
+          if (container instanceof HTMLElement) {
+            container.click();
+            return true;
+          }
+          const visibleSelects = Array.from(document.querySelectorAll(".select-container, [class*='select-container']"))
+            .filter((item): item is HTMLElement => item instanceof HTMLElement && item.offsetHeight > 0);
+          const candidate =
+            visibleSelects.find((item) => item.textContent?.includes("vlog")) ||
+            visibleSelects[visibleSelects.length - 1];
+          candidate?.click();
+          return Boolean(candidate);
+        });
+        if (clickedContainer) {
           await sleep(1000);
-          // Click the target category item
           const clicked = await page.evaluate((targetCategory: string) => {
-            const items = document.querySelectorAll('.drop-list-v2-item');
+            const items = document.querySelectorAll('.drop-list-v2-item, [class*="drop-list"] [title], [role="option"]');
             for (const item of items) {
-              if (item.getAttribute('title') === targetCategory) {
+              const title = item.getAttribute('title') || item.textContent?.trim();
+              if (title === targetCategory || title?.includes(targetCategory)) {
                 (item as HTMLElement).click();
                 return true;
               }
@@ -270,6 +303,8 @@ async function publishBilibili(
           if (!clicked) {
             console.log(`[Category] "${options.category}" not found in dropdown, keeping default`);
           }
+        } else {
+          console.log("[Category] Category dropdown not found, keeping default");
         }
       } catch (e) {
         console.error('[Category] Failed to set category:', e);
@@ -328,7 +363,7 @@ async function publishBilibili(
             // Try clicking the parent div instead of the span
             await page.evaluate(() => {
               const ce = document.querySelector('.cover-empty');
-              if (ce) ce.click();
+              if (ce) (ce as HTMLElement).click();
             });
             await sleep(3000);
           }
@@ -337,8 +372,8 @@ async function publishBilibili(
             const checkbox = document.querySelector('.bcc-checkbox-checkbox');
             if (checkbox) {
               const input = checkbox.querySelector('input[type="checkbox"]');
-              if (input && !input.checked) {
-                checkbox.click();
+              if (input instanceof HTMLInputElement && !input.checked) {
+                (checkbox as HTMLElement).click();
               }
             }
           });
@@ -370,10 +405,10 @@ async function publishBilibili(
           // 关闭封面制作弹窗 - 点击"完成"按钮确认封面
           const confirmResult = await page.evaluate(() => {
             const submitBtn = document.querySelector('.cover-editor-button .button.submit');
-            if (submitBtn) { submitBtn.click(); return 'clicked submit'; }
+            if (submitBtn) { (submitBtn as HTMLElement).click(); return 'clicked submit'; }
             const fallback = Array.from(document.querySelectorAll('span, button, div'))
-              .find(el => el.textContent.trim() === '完成' && el.classList.contains('submit') && el.offsetHeight > 0);
-            if (fallback) { fallback.click(); return 'clicked fallback'; }
+              .find(el => el.textContent?.trim() === '完成' && el.classList.contains('submit') && (el as HTMLElement).offsetHeight > 0);
+            if (fallback) { (fallback as HTMLElement).click(); return 'clicked fallback'; }
             return 'not found';
           });
           console.log('[Cover] Close dialog:', confirmResult);
@@ -454,10 +489,10 @@ async function publishBilibili(
     onProgress({ stage: "done-bilibili", percent: 50, message: "✅ B站投稿成功！" });
   } catch (e) {
     // Disable beforeunload before disconnect to avoid dialog
-    try { await page.evaluate(() => { window.onbeforeunload = null; }); } catch (e2) {}
+    try { await page?.evaluate(() => { window.onbeforeunload = null; }); } catch (e2) {}
     throw e;
   } finally {
-    try { await page.evaluate(() => { window.onbeforeunload = null; }); } catch (e) {}
+    try { await page?.evaluate(() => { window.onbeforeunload = null; }); } catch (e) {}
     try { await browser.disconnect(); } catch (e) {}
   }
 }

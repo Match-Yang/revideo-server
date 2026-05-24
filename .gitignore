@@ -11,6 +11,12 @@ public/
 # Rendered output
 out/
 
+# Runtime workflow data
+data/browser/
+data/jobs/
+data/events.jsonl
+data/settings.json
+
 # Environment
 .env
 .env.local

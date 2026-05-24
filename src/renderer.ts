@@ -55,6 +55,21 @@ function downloadWithProxy(url: string): Promise<Buffer> {
 
 const PUBLIC_DIR = path.join(process.cwd(), "public");
 
+function webpackOverride(config: any): any {
+  const next = enableTailwind(config);
+  next.cache = false;
+  next.snapshot = {
+    ...next.snapshot,
+    managedPaths: [],
+    immutablePaths: [],
+  };
+  next.output = {
+    ...next.output,
+    hashFunction: "sha256",
+  };
+  return next;
+}
+
 export interface RenderOptions {
   dirName: string;
 }
@@ -71,8 +86,7 @@ function normalizeComments(commentFilePath: string, videoDuration: number) {
 
   // Already in correct format (yt-dlp info JSON)
   if (raw && !Array.isArray(raw) && Array.isArray(raw.comments)) {
-    // Ensure duration exists
-    if (!raw.duration) raw.duration = videoDuration;
+    raw.duration = videoDuration;
     fs.writeFileSync(commentFilePath, JSON.stringify(raw));
     return;
   }
@@ -110,14 +124,17 @@ export function preparePublicDir(dir: DirInfo) {
   const localVideo = path.join(PUBLIC_DIR, `video${videoExt}`);
   fs.copyFileSync(dir.videoFile!, localVideo);
 
-  // Get actual video duration
+  // Get actual video duration. Job rendering can repeat the same short source
+  // video so the final composition has room for more comments.
   const videoDuration = getVideoDuration(localVideo);
+  const repeatTimes = Math.min(10, Math.max(1, Number(dir.repeatTimes || 1)));
+  const compositionDuration = videoDuration * repeatTimes;
 
   // Copy and normalize comment file
   if (dir.commentFile) {
     const localComments = path.join(PUBLIC_DIR, "comments.json");
     fs.copyFileSync(dir.commentFile, localComments);
-    normalizeComments(localComments, videoDuration);
+    normalizeComments(localComments, compositionDuration);
   }
 
   // Copy subtitle file (keep original name)
@@ -218,15 +235,18 @@ export async function render(
   emit("downloading-avatars", 3, "下载头像...");
   await downloadAvatars();
 
-  // Determine duration: comments.json duration > ffprobe > fallback 60s
+  // Determine duration from source video and repeatTimes. comments.json is
+  // normalized to this value, so it must not shrink repeated Shorts back down.
   const videoExt = path.extname(dir.videoFile!);
   const localVideo = path.join(PUBLIC_DIR, `video${videoExt}`);
-  let durationSec = getVideoDuration(localVideo);
+  const sourceVideoDurationSec = getVideoDuration(localVideo);
+  const repeatTimes = Math.min(10, Math.max(1, Number(dir.repeatTimes || 1)));
+  let durationSec = sourceVideoDurationSec * repeatTimes;
   const commentsPath = path.join(PUBLIC_DIR, "comments.json");
   if (fs.existsSync(commentsPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(commentsPath, "utf-8"));
-      if (data.duration) durationSec = data.duration;
+      if (data.duration) durationSec = Math.max(durationSec, Number(data.duration) || 0);
     } catch {}
   }
 
@@ -239,6 +259,7 @@ export async function render(
     commentFile: dir.commentFile ? "comments.json" : "",
     subtitleFiles: dir.subtitleFiles.length > 0 ? [path.basename(dir.subtitleFiles[0])] : [],
     durationInFrames: totalFrames,
+    sourceVideoDurationInFrames: Math.max(1, Math.ceil(sourceVideoDurationSec * fps)),
   };
 
   // Ensure out dir exists
@@ -253,7 +274,8 @@ export async function render(
   emit("bundling", 5, "打包项目...");
   const bundleLocation = await bundle({
     entryPoint: path.resolve("./src/index.ts"),
-    webpackOverride: enableTailwind,
+    enableCaching: false,
+    webpackOverride,
     signal,
   });
 

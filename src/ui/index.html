@@ -1,184 +1,452 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="h-full">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>视频渲染</title>
+  <title>Revideo 管理面板</title>
+  <link rel="icon" href="data:,">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --background: #f8fafc;
+      --card: #ffffff;
+      --foreground: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --primary: #0f172a;
+      --primary-foreground: #ffffff;
+      --accent: #f1f5f9;
+      --success: #059669;
+      --info: #0284c7;
+      --warning: #d97706;
+      --error: #dc2626;
+    }
+
+    * { box-sizing: border-box; letter-spacing: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0a0a0a;
-      color: #e0e0e0;
-      min-height: 100vh;
+      margin: 0;
+      min-height: 100%;
+      background: var(--background);
+      color: var(--foreground);
+      font-feature-settings: "tnum";
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .app-shell { min-height: 100vh; display: grid; grid-template-columns: 256px minmax(0, 1fr); }
+    .sidebar { border-right: 1px solid var(--border); background: var(--card); padding: 20px 16px; }
+    .brand { display: flex; align-items: center; gap: 12px; padding: 0 8px 22px; }
+    .brand-mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--primary); color: var(--primary-foreground); font-weight: 800; }
+    .brand-title { font-size: 17px; font-weight: 700; line-height: 1.2; }
+    .brand-subtitle { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .nav { display: grid; gap: 4px; }
+    .nav-item {
+      width: 100%;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #475569;
+      cursor: pointer;
       display: flex;
-      align-items: flex-start;
+      align-items: center;
+      height: 38px;
+      padding: 0 12px;
+      text-align: left;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .nav-item:hover { background: var(--accent); color: var(--foreground); }
+    .nav-item.active { background: var(--primary); color: var(--primary-foreground); }
+    .side-card { margin-top: 24px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: #fbfdff; }
+    .side-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+    .content { min-width: 0; padding: 24px; }
+    .page { display: grid; gap: 16px; }
+    .hidden { display: none !important; }
+    .page-header { border: 1px solid var(--border); border-radius: 14px; background: var(--card); padding: 22px 24px; }
+    .eyebrow { color: var(--muted); font-size: 13px; font-weight: 600; }
+    .page-title { margin: 4px 0 0; font-size: 30px; line-height: 1.2; font-weight: 750; }
+    .page-copy { margin: 8px 0 0; max-width: 760px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+    .card { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
+    .card-body { padding: 18px; }
+    .card-title { margin: 0; font-size: 16px; font-weight: 700; }
+    .card-actions { display: flex; margin-top: 12px; }
+    .section-copy { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .btn {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--foreground);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
       justify-content: center;
-      padding: 32px 0;
-    }
-
-    /* Left panel - controls */
-    .left-panel {
-      width: 280px;
-      flex-shrink: 0;
-      background: #1a1a1a;
-      padding: 24px 20px;
-      display: flex;
-      flex-direction: column;
-      align-self: flex-start;
-    }
-    h1 {
-      font-size: 18px;
-      margin-bottom: 28px;
-      color: #fff;
-    }
-    label {
-      display: block;
-      font-size: 13px;
-      color: #999;
-      margin-bottom: 6px;
-    }
-    select {
-      width: 100%;
-      padding: 10px 14px;
+      gap: 8px;
+      height: 38px;
+      padding: 0 14px;
       font-size: 14px;
-      background: #2a2a2a;
-      color: #fff;
-      border: 1px solid #444;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .btn:hover { background: var(--accent); }
+    .btn-sm { height: 32px; padding: 0 10px; font-size: 12px; }
+    .btn-primary { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+    .btn-primary:hover { background: #1e293b; }
+    .btn-error { border-color: #fecaca; background: #fef2f2; color: var(--error); }
+    .btn-outline { background: var(--card); }
+    .input, .select, .textarea {
+      width: 100%;
+      border: 1px solid var(--border);
       border-radius: 8px;
+      background: var(--card);
+      color: var(--foreground);
       outline: none;
-      cursor: pointer;
-      appearance: none;
-    }
-    select:focus { border-color: #666; }
-    .info {
-      margin-top: 6px;
-      font-size: 12px;
-      color: #777;
-    }
-    .render-btn {
-      width: 100%;
-      margin-top: 20px;
-      padding: 12px;
-      font-size: 15px;
-      font-weight: 600;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      background: #4a9eff;
-      color: #fff;
-      transition: background 0.2s;
-    }
-    .render-btn:hover:not(:disabled) { background: #3a8eef; }
-    .render-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
-    .status {
-      margin-top: 14px;
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      display: none;
-    }
-    .status.rendering { display: block; background: #1a2a1a; color: #6f6; }
-    .status.success { display: block; background: #1a2a1a; color: #6f6; }
-    .status.error { display: block; background: #2a1a1a; color: #f66; }
-    .empty { text-align: center; color: #666; padding: 40px 0; }
-    .no-dirs {
-      text-align: center;
-      color: #666;
-      padding: 60px 0;
-    }
-
-    /* Right panel - preview */
-    .right-panel {
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      justify-content: flex-start;
-      background: #1a1a1a;
-      padding: 24px;
-      align-self: flex-start;
-    }
-    .preview-placeholder {
-      color: #444;
-      font-size: 15px;
-      text-align: center;
-    }
-    .preview-section {
-      width: auto;
-      display: none;
-    }
-    .preview-section.visible { display: block; }
-    .preview-tabs {
-      display: flex;
-    }
-    .preview-tab {
-      flex: 1;
-      padding: 9px;
-      font-size: 13px;
-      font-weight: 600;
-      background: #222;
-      color: #888;
-      border: none;
-      cursor: pointer;
-      transition: all 0.2s;
-      width: auto;
-      margin-top: 0;
-      border-radius: 0;
-    }
-    .preview-tab:first-child { border-radius: 8px 0 0 0; }
-    .preview-tab:last-child { border-radius: 0 8px 0 0; }
-    .preview-tab.active { background: #333; color: #fff; }
-    .preview-wrap {
-      background: #000;
-      border-radius: 0 0 8px 8px;
-      overflow: hidden;
-    }
-    .preview-wrap video {
-      height: auto;
-      max-height: calc(100vh - 100px);
-      max-width: 80vh;
-      display: block;
-    }
-    .preview-empty {
-      text-align: center;
-      padding: 60px 16px;
-      color: #555;
       font-size: 14px;
+    }
+    .input, .select { height: 40px; padding: 0 12px; }
+    .textarea { min-height: 96px; padding: 10px 12px; resize: vertical; }
+    .input:focus, .select:focus, .textarea:focus { border-color: #94a3b8; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.18); }
+    .field-label, .label-text { display: block; margin-bottom: 7px; color: #475569; font-size: 13px; font-weight: 600; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--accent);
+      color: #334155;
+      height: 24px;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .badge-success { border-color: #bbf7d0; background: #ecfdf5; color: var(--success); }
+    .badge-info { border-color: #bae6fd; background: #f0f9ff; color: var(--info); }
+    .badge-error { border-color: #fecaca; background: #fef2f2; color: var(--error); }
+    .badge-warning { border-color: #fde68a; background: #fffbeb; color: var(--warning); }
+    .badge-ghost { border-color: var(--border); background: #f8fafc; color: #475569; }
+    .overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .overview-card.active { background: var(--primary); color: var(--primary-foreground); }
+    .overview-card.active .btn { border-color: rgba(255,255,255,0.28); background: rgba(255,255,255,0.12); color: var(--primary-foreground); }
+    .overview-card.active .btn:hover { background: rgba(255,255,255,0.18); }
+    .metric-label { color: var(--muted); font-size: 13px; font-weight: 650; }
+    .overview-card.active .metric-label, .overview-card.active .metric-hint { color: rgba(255,255,255,0.72); }
+    .metric-value { margin-top: 12px; font-size: 42px; line-height: 1; font-weight: 780; }
+    .metric-hint { margin-top: 8px; color: var(--muted); font-size: 13px; }
+    .overview-lower { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; }
+    .soft-row, .empty-state {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 14px;
+    }
+    .soft-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .empty-state { color: var(--muted); font-size: 13px; text-align: center; }
+    .queue-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .breakdown-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+    .create-form { display: grid; grid-template-columns: minmax(320px, 1fr) 120px 220px auto; gap: 12px; margin-top: 14px; }
+    .filter-bar { display: grid; grid-template-columns: minmax(0, 1fr) 190px auto; gap: 12px; padding: 14px; border-bottom: 1px solid var(--border); }
+    .progress-bar { display: flex; width: 100%; min-width: 120px; gap: 4px; }
+    .progress-segment { height: 8px; flex: 1; border-radius: 999px; background: #e2e8f0; }
+    .seg-done { background: var(--success); }
+    .seg-current { background: var(--warning); }
+    .seg-error { background: var(--error); }
+    .task-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+    .detail-panel { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow: auto; }
+    .detail-summary { border: 1px solid var(--border); border-radius: 12px; background: #f8fafc; padding: 16px; }
+    .detail-id { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; }
+    .detail-title { margin: 7px 0 0; font-size: 17px; line-height: 1.35; font-weight: 750; }
+    .detail-subtitle { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .detail-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+    .detail-metrics { display: grid; gap: 10px; margin-top: 14px; }
+    .info-tile { border: 1px solid var(--border); border-radius: 10px; background: #fbfdff; padding: 12px; }
+    .info-label { color: var(--muted); font-size: 12px; font-weight: 650; }
+    .info-value { margin-top: 8px; font-size: 13px; line-height: 1.55; }
+    .flow-list { display: grid; gap: 10px; margin-top: 14px; }
+    .flow-item { border: 1px solid var(--border); border-radius: 10px; background: #fbfdff; overflow: hidden; }
+    .flow-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; padding: 12px; font-size: 14px; font-weight: 700; }
+    .flow-content { border-top: 1px solid var(--border); padding: 12px; }
+    .detail-dl { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px 12px; margin: 0; font-size: 13px; }
+    .detail-dl dt { color: var(--muted); font-weight: 650; }
+    .detail-dl dd { margin: 0; min-width: 0; }
+    .detail-stack { display: grid; gap: 8px; }
+    .table-wrap { max-width: 100%; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+    th { height: 42px; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--muted); text-align: left; font-weight: 600; }
+    td { height: 56px; padding: 0 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    th:nth-child(1), td:nth-child(1) { width: 48px; }
+    th:nth-child(2), td:nth-child(2) { width: 88px; }
+    th:nth-child(3), td:nth-child(3) { width: 132px; }
+    th:nth-child(4), td:nth-child(4) { width: 104px; }
+    th:nth-child(5), td:nth-child(5) { width: 158px; }
+    th:nth-child(6), td:nth-child(6) { width: 54px; }
+    tbody tr[data-job-id] { cursor: pointer; }
+    tbody tr[data-job-id]:hover { background: #f8fafc; }
+    tr.selected { background: #f1f5f9; }
+    .dropdown { position: relative; }
+    .dropdown-content { display: none; position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; min-width: 240px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 18px 45px rgba(15, 23, 42, 0.12); padding: 8px; }
+    .dropdown:focus-within .dropdown-content, .dropdown:hover .dropdown-content { display: block; }
+    .choice { display: flex; align-items: center; gap: 10px; border-radius: 8px; padding: 8px; font-size: 14px; cursor: pointer; }
+    .choice:hover { background: var(--accent); }
+    .choice input { accent-color: var(--primary); }
+    .stats { display: flex; gap: 8px; }
+    .stat { min-width: 112px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; padding: 10px 12px; }
+    .stat-title { color: var(--muted); font-size: 12px; }
+    .stat-value { margin-top: 3px; font-size: 22px; font-weight: 750; }
+    .settings-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .tabs { display: grid; gap: 12px; }
+    .tab-content { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: #fbfdff; }
+    .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 80; }
+    .alert { border-radius: 10px; background: var(--primary); color: var(--primary-foreground); padding: 10px 14px; font-size: 14px; }
+    .rounded-box { border-radius: 10px; }
+    .break-all { word-break: break-all; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .muted { color: var(--muted); }
+    .text-small { color: var(--muted); font-size: 12px; }
+    .browser-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+    .min-w-0 { min-width: 0; }
+    .mt-2 { margin-top: 8px; }
+    .space-y-3 > * + * { margin-top: 12px; }
+    .space-y-4 > * + * { margin-top: 16px; }
+    .gap-2 { gap: 8px; }
+    .gap-3 { gap: 12px; }
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+    .grid { display: grid; }
+    @media (max-width: 1279px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar { position: static; }
+      .overview-grid, .breakdown-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .overview-lower, .create-form, .filter-bar, .browser-grid { grid-template-columns: 1fr; }
+      .task-layout { grid-template-columns: 1fr; }
+      .detail-panel { position: static; max-height: none; }
+      .settings-grid, .two-col { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .overview-grid, .breakdown-grid, .overview-lower, .create-form, .filter-bar { grid-template-columns: 1fr; }
+      .content { padding: 14px; }
+      .page-header { padding: 18px; }
+      .page-header .flex { flex-wrap: wrap; gap: 12px; }
+      table { min-width: 584px; }
     }
   </style>
 </head>
 <body>
-  <!-- Left: Controls -->
-  <div class="left-panel">
-    <h1>视频渲染</h1>
-    <div id="loading" class="empty">加载中...</div>
-    <div id="main" style="display:none">
-      <label>选择视频文件夹</label>
-      <select id="dirSelect"></select>
-      <div id="dirInfo" class="info"></div>
-      <button id="renderBtn" class="render-btn" disabled>开始渲染</button>
-      <div id="status" class="status"></div>
-    </div>
-    <div id="noDirs" class="no-dirs" style="display:none">
-      ~/Movies 下没有找到包含视频的文件夹
-    </div>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">R</div>
+        <div>
+          <div class="brand-title">Revideo</div>
+          <div id="updatedAt" class="brand-subtitle">等待刷新</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item" data-page="overview">纵览</button>
+        <button class="nav-item" data-page="tasks">任务</button>
+        <button class="nav-item" data-page="settings">设置</button>
+      </nav>
+
+      <div class="side-card">
+        <div class="side-card-header">
+          <span>系统状态</span>
+          <button id="refreshBtn" class="btn btn-sm">刷新</button>
+        </div>
+        <div id="sideStatus" class="flex flex-wrap gap-2"></div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section class="page" data-view="overview">
+        <header class="page-header">
+          <div class="eyebrow">Overview</div>
+          <h2 class="page-title">纵览</h2>
+          <p class="page-copy">只看系统整体状态。点击统计卡里的查看分布，展开来源、目标平台或异常步骤分布。</p>
+        </header>
+
+        <section id="overviewCards" class="overview-grid"></section>
+        <section id="overviewBreakdown" class="card"></section>
+
+        <div class="overview-lower">
+          <section class="card">
+            <div class="card-body">
+              <h3 class="card-title">最近异常</h3>
+              <p class="section-copy">点击打开任务进入任务页查看详情。</p>
+              <div id="recentFailures" class="space-y-3" style="margin-top: 12px;"></div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="card-body">
+              <h3 class="card-title">发布队列摘要</h3>
+              <div id="queueSummary" class="space-y-3" style="margin-top: 12px;"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="page hidden" data-view="tasks">
+        <header class="page-header">
+          <div class="eyebrow">Tasks</div>
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="page-title">任务工作台</h2>
+              <p class="page-copy">创建任务、按状态过滤任务，点击任务行后在右侧查看流程详情。</p>
+            </div>
+            <div class="stats">
+              <div class="stat"><div class="stat-title">任务数</div><div id="taskTotalStat" class="stat-value">-</div></div>
+              <div class="stat"><div class="stat-title">进行中</div><div id="taskRunningStat" class="stat-value">-</div></div>
+            </div>
+          </div>
+        </header>
+
+        <section class="card">
+          <div class="card-body">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="card-title">创建新任务</h3>
+                <p class="section-copy">重复次数会让最终视频重复播放同一个源视频，用于展示更多评论。</p>
+              </div>
+              <div id="createHint" class="section-copy"></div>
+            </div>
+            <form id="createJobForm" class="create-form">
+              <input id="sourceUrlInput" class="input" placeholder="粘贴视频 URL，自动识别平台">
+              <input id="repeatTimesInput" type="number" min="1" max="10" value="1" class="input" title="重复次数">
+              <div class="dropdown">
+                <button type="button" id="targetDropdownLabel" class="btn" style="width: 100%; justify-content: space-between;">目标平台</button>
+                <div class="dropdown-content">
+                  <div id="targetPlatformChoices"></div>
+                </div>
+              </div>
+              <button class="btn btn-primary" type="submit">创建任务</button>
+            </form>
+          </div>
+        </section>
+
+        <div class="task-layout">
+          <section class="card">
+            <div class="filter-bar">
+              <input id="jobSearch" class="input" placeholder="搜索标题、Job ID、原始链接">
+              <select id="jobStatusFilter" class="select"></select>
+              <button id="refreshJobsBtn" class="btn">刷新列表</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>序号</th>
+                    <th>状态</th>
+                    <th>进度</th>
+                    <th>创建时间</th>
+                    <th>原始链接</th>
+                    <th>重复</th>
+                    <th>标题</th>
+                  </tr>
+                </thead>
+                <tbody id="jobsTable">
+                  <tr><td colspan="7" style="text-align:center;color:var(--muted);height:96px;">加载中</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside class="card detail-panel">
+            <div class="card-body">
+              <h3 class="card-title">任务详情</h3>
+              <p class="section-copy">选择任务后在这里查看流程、文件、批次和错误信息。</p>
+              <div id="jobDetail" style="margin-top: 14px;"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="page hidden" data-view="settings">
+        <header class="page-header">
+          <div class="eyebrow">Settings</div>
+          <h2 class="page-title">设置</h2>
+          <p class="page-copy">配置默认策略。新任务会保存创建时的设置快照，后续修改不会影响历史任务。</p>
+        </header>
+
+        <form id="settingsForm" class="space-y-4">
+          <section class="card">
+            <div class="card-body">
+              <h3 class="card-title">视频及信息下载设置</h3>
+              <div class="settings-grid" style="margin-top: 14px;">
+                <label><span class="field-label">默认横屏分辨率</span><input name="download.landscapeResolution" class="input" placeholder="1080p"></label>
+                <label><span class="field-label">默认竖屏分辨率</span><input name="download.portraitResolution" class="input" placeholder="1080p"></label>
+                <label><span class="field-label">每条评论持续时间</span><input name="download.commentSeconds" type="number" min="0.5" step="0.5" class="input" placeholder="2"></label>
+                <label><span class="field-label">评论数量上限</span><input name="download.maxComments" type="number" min="1" max="5000" class="input" placeholder="800"></label>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-body">
+              <h3 class="card-title">翻译与审核设置</h3>
+              <div class="two-col" style="margin-top: 14px;">
+                <label><span class="field-label">目标语言</span><input name="translation.targetLanguage" class="input" placeholder="zh-CN"></label>
+                <label><span class="field-label">目标语言继续翻译</span><select name="translation.retranslateTargetLanguage" class="select"><option value="false">否</option><option value="true">是</option></select></label>
+              </div>
+              <div class="two-col" style="margin-top: 14px;">
+                <label><span class="field-label">正面提示词</span><textarea name="translation.positivePrompt" class="textarea" placeholder="将非中文内容翻译为自然中文；中文内容保持原文；保留必要专有名词和用户语气。"></textarea></label>
+                <label><span class="field-label">负面提示词</span><textarea name="translation.negativePrompt" class="textarea" placeholder="过滤政治敏感、违法交易、色情低俗、仇恨辱骂、诈骗引流、极端主义、平台容易下架的内容；对模糊风险内容按不通过处理。"></textarea></label>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-body">
+              <h3 class="card-title">视频发布设置</h3>
+              <div class="settings-grid" style="margin-top: 14px;">
+                <label><span class="field-label">发布时间逻辑</span><select name="publishing.scheduleMode" class="select"><option value="immediate">立即发布</option><option value="scheduled">定时发布</option></select></label>
+                <label><span class="field-label">发布失败重试次数</span><input name="publishing.retryCount" type="number" min="0" max="10" class="input"></label>
+                <div><span class="field-label">默认发布平台</span><div id="defaultPlatformSettings" class="flex flex-wrap gap-2"></div></div>
+              </div>
+              <div class="tab-content" style="margin-top: 16px;">
+                <h4 style="margin:0 0 12px;font-size:14px;font-weight:700;">B站</h4>
+                <div class="two-col">
+                  <label><span class="field-label">分区</span><input name="publishing.platformConfigs.bilibili.category" class="input" placeholder="汽车"></label>
+                  <label><span class="field-label">创作声明</span><input name="publishing.platformConfigs.bilibili.declaration" class="input" placeholder="转载"></label>
+                </div>
+                <div class="two-col" style="margin-top: 14px;">
+                  <label><span class="field-label">标签</span><input name="publishing.platformConfigs.bilibili.tags" class="input" placeholder="汽车,海外视频"></label>
+                  <label><span class="field-label">简介模板</span><textarea name="publishing.platformConfigs.bilibili.descriptionTemplate" class="textarea"></textarea></label>
+                </div>
+              </div>
+              <div class="tab-content" style="margin-top: 12px;">
+                <h4 style="margin:0 0 12px;font-size:14px;font-weight:700;">抖音</h4>
+                <div class="two-col">
+                  <label><span class="field-label">创作声明类型</span><input name="publishing.platformConfigs.douyin.declarationType" class="input" placeholder="转载"></label>
+                  <label><span class="field-label">可见性</span><input name="publishing.platformConfigs.douyin.visibility" class="input" placeholder="公开"></label>
+                </div>
+                <div class="two-col" style="margin-top: 14px;">
+                  <label><span class="field-label">话题</span><input name="publishing.platformConfigs.douyin.topics" class="input" placeholder="汽车 海外视频"></label>
+                  <label><span class="field-label">简介模板</span><textarea name="publishing.platformConfigs.douyin.descriptionTemplate" class="textarea"></textarea></label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h3 class="card-title">浏览器与登录状态</h3>
+                <button id="startBrowserBtn" type="button" class="btn">启动浏览器</button>
+              </div>
+              <div id="browserPanel" style="margin-top: 14px;"></div>
+            </div>
+          </section>
+
+          <div style="display:flex;justify-content:flex-end;">
+            <button class="btn btn-primary" type="submit">保存设置</button>
+          </div>
+        </form>
+      </section>
+    </main>
   </div>
 
-  <!-- Right: Preview -->
-  <div class="right-panel">
-    <div id="previewPlaceholder" class="preview-placeholder">选择一个文件夹以预览</div>
-    <div id="previewSection" class="preview-section">
-      <div class="preview-tabs">
-        <button class="preview-tab active" data-tab="preview">实时预览</button>
-        <button class="preview-tab" data-tab="source">源视频</button>
-      </div>
-      <div class="preview-wrap">
-        <iframe id="previewIframe" width="360" height="640" style="display:none;border:none;"></iframe>
-        <video id="previewVideo" controls playsinline style="display:none;"></video>
-        <div id="previewEmpty" class="preview-empty" style="display:none">暂无渲染结果，请先渲染</div>
-      </div>
-    </div>
+  <div id="toast" class="toast hidden">
+    <div class="alert"><span></span></div>
   </div>
 
   <script src="client.js"></script>

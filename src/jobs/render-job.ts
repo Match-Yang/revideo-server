@@ -1,0 +1,70 @@
+import fs from "fs";
+import path from "path";
+import type { DirInfo } from "../types";
+import { render, type RenderProgress } from "../renderer";
+import type { RevideoJob } from "./types";
+
+export interface JobRenderResult {
+  outputPath: string;
+  coverPath?: string;
+  durationSec: number;
+}
+
+function pickSubtitle(subtitlePaths: string[]): string[] {
+  const zh = subtitlePaths.find((file) => /zh|cn|chinese/i.test(path.basename(file)));
+  return zh ? [zh] : subtitlePaths.slice(0, 1);
+}
+
+export async function renderJob(
+  job: RevideoJob,
+  onProgress?: (progress: RenderProgress) => void,
+  signal?: AbortSignal
+): Promise<JobRenderResult> {
+  const normalized = job.source.metadata?.normalizedAssets as
+    | {
+        mediaPath?: string;
+        normalizedCommentsPath?: string;
+        subtitlePaths?: string[];
+      }
+    | undefined;
+  const translation = job.source.metadata?.translation as
+    | {
+        comments?: { outputPath?: string };
+        subtitles?: { outputPaths?: string[] };
+      }
+    | undefined;
+
+  const mediaPath = normalized?.mediaPath;
+  if (!mediaPath || !fs.existsSync(mediaPath)) {
+    throw new Error("Job does not have a normalized mediaPath");
+  }
+
+  const dirInfo: DirInfo = {
+    name: job.id,
+    path: job.artifacts.rootDir,
+    videoFile: mediaPath,
+    audioFiles: [],
+    commentFile:
+      translation?.comments?.outputPath && fs.existsSync(translation.comments.outputPath)
+        ? translation.comments.outputPath
+        : normalized?.normalizedCommentsPath && fs.existsSync(normalized.normalizedCommentsPath)
+          ? normalized.normalizedCommentsPath
+          : undefined,
+    subtitleFiles: pickSubtitle(
+      translation?.subtitles?.outputPaths?.length
+        ? translation.subtitles.outputPaths
+        : normalized?.subtitlePaths || []
+    ),
+    repeatTimes: job.options.repeatTimes,
+  };
+
+  const result = await render(dirInfo, onProgress, signal);
+  const outputPath = path.resolve(process.cwd(), result.output);
+  const coverPath = path.resolve(process.cwd(), "out", `${job.id}-cover.jpg`);
+
+  return {
+    outputPath,
+    coverPath: fs.existsSync(coverPath) ? coverPath : undefined,
+    durationSec: result.durationSec,
+  };
+}

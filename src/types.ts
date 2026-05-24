@@ -32,6 +32,7 @@ export interface DirInfo {
   audioFiles: string[];
   commentFile?: string;
   subtitleFiles: string[];
+  repeatTimes?: number;
 }
 
 // ============================================================

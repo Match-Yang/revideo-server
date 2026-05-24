@@ -17,6 +17,7 @@ const defaultProps: VideoCommentsProps = {
   commentFile: "comments.json",
   subtitleFiles: [],
   durationInFrames: 0,
+  sourceVideoDurationInFrames: 0,
 };
 
 export const RemotionRoot: React.FC = () => {
@@ -32,6 +33,7 @@ export const RemotionRoot: React.FC = () => {
         defaultProps={defaultProps}
         calculateMetadata={async ({ props }) => {
           let durationInFrames = props.durationInFrames || 0;
+          let sourceVideoDurationInFrames = props.sourceVideoDurationInFrames || 0;
           let isPortrait = props.isPortrait ?? false;
           let videoAspectRatio = props.videoAspectRatio ?? 16 / 9;
 
@@ -44,6 +46,9 @@ export const RemotionRoot: React.FC = () => {
               }
               if (!durationInFrames || durationInFrames <= 0) {
                 durationInFrames = Math.ceil(meta.durationInSeconds * FPS);
+              }
+              if (!sourceVideoDurationInFrames || sourceVideoDurationInFrames <= 0) {
+                sourceVideoDurationInFrames = Math.ceil(meta.durationInSeconds * FPS);
               }
             } catch {}
           }
@@ -60,6 +65,7 @@ export const RemotionRoot: React.FC = () => {
               ...props,
               isPortrait,
               videoAspectRatio,
+              sourceVideoDurationInFrames,
             },
           };
         }}

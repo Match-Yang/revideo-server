@@ -35,7 +35,9 @@
     "render": "npx tsx src/render.ts",
     "build": "remotion bundle",
     "upgrade": "remotion upgrade",
-    "lint": "eslint src && tsc"
+    "lint": "eslint src && tsc",
+    "test:moderation": "tsx scripts/moderation-smoke-test.ts",
+    "test:translation-batch": "tsx -r dotenv/config scripts/translation-batch-smoke-test.ts"
   },
   "sideEffects": [
     "*.css"

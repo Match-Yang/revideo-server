@@ -1,9 +1,50 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
 import { getDirs, getDirByName, render, preparePublicDir } from "./renderer";
 import { scanDir } from "./scan-dir";
 import { publish, type PublishRequest } from "./publish";
+import { SERVER_PORT } from "./config";
+import {
+  appendJobEvent,
+  getJobEvents,
+} from "./jobs/events";
+import {
+  createJob,
+  createJobId,
+  listJobs,
+  loadJob,
+  saveJob,
+  setJobStep,
+} from "./jobs/store";
+import { normalizeJobAssets } from "./jobs/normalize";
+import { renderJob } from "./jobs/render-job";
+import { translateJobAssets } from "./jobs/translate-job";
+import type { CreateJobRequest, JobStep } from "./jobs/types";
+import { generateDrafts } from "./jobs/drafts";
+import {
+  preflightJobTarget,
+  publishJobTarget,
+} from "./jobs/publish-job";
+import {
+  checkPlatformLogin,
+  getBrowserHealth,
+  getBrowserStatus,
+  openPlatformLogin,
+  startBrowser,
+  stopBrowser,
+} from "./browser/manager";
+import {
+  listPlatformCapabilities,
+  resolveSourceAdapter,
+} from "./platforms/registry";
+import {
+  listTranslateProviders,
+  translateText,
+} from "./translate/openai-compatible";
+import { getSystemHealth } from "./health";
+import { calculateTargetCommentCount, loadSettings, saveSettings } from "./settings";
 import {
   createTask,
   getAllTasks,
@@ -20,8 +61,34 @@ import type { AddTaskRequest, TaskFilter } from "./types";
 
 let currentRender: { name: string; progress: any; abortController?: AbortController; taskId?: string } | null = null;
 
+interface QueuedJobRun {
+  id: string;
+  jobId: string;
+  steps: string[];
+  force?: boolean;
+  formatId?: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  createdAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  error?: string;
+  abortController?: AbortController;
+}
+
+interface JobRunOptions {
+  steps: string[];
+  force?: boolean;
+  formatId?: string;
+  signal?: AbortSignal;
+}
+
+const jobRunQueue: QueuedJobRun[] = [];
+const jobRunHistory: QueuedJobRun[] = [];
+const cancelledJobRunIds = new Set<string>();
+let activeJobRun: QueuedJobRun | null = null;
+
 const app = express();
-const PORT = 3001;
+const PORT = SERVER_PORT;
 
 app.use(express.json());
 
@@ -47,6 +114,373 @@ function setupSSE(res: express.Response) {
   };
 }
 
+function markCompletedIfAllTargetsPublished(jobId: string): void {
+  const job = loadJob(jobId);
+  if (!job || job.targets.length === 0) return;
+  if (job.targets.every((target) => target.status === "published")) {
+    setJobStep(jobId, "completed", "completed", { percent: 100 });
+  }
+}
+
+function snapshotQueue() {
+  return {
+    active: activeJobRun,
+    queued: jobRunQueue,
+    recent: jobRunHistory.slice(-20).reverse(),
+  };
+}
+
+function defaultRunSteps(): string[] {
+  return ["download", "normalize", "translate", "render", "generate-drafts", "preflight-publish"];
+}
+
+function runStepsFromJobStep(step: JobStep): string[] {
+  if (step === "downloading-source") return defaultRunSteps();
+  if (step === "normalizing-assets") return ["normalize", "translate", "render", "generate-drafts", "preflight-publish"];
+  if (step === "translating-assets" || step === "moderating-assets") return ["translate", "render", "generate-drafts", "preflight-publish"];
+  if (step === "rendering-video") return ["render", "generate-drafts", "preflight-publish"];
+  if (step === "generating-platform-drafts") return ["generate-drafts", "preflight-publish"];
+  if (step === "preflighting-targets") return ["preflight-publish"];
+  if (step === "publishing-targets") return ["publish"];
+  return defaultRunSteps();
+}
+
+function recoverInterruptedJobRuns(): void {
+  for (const job of listJobs()) {
+    const step = job.workflow.currentStep;
+    if (job.workflow.steps[step]?.status !== "running") continue;
+    setJobStep(job.id, step, "failed", {
+      error: "Server restarted while this step was running",
+    });
+    appendJobEvent({
+      jobId: job.id,
+      level: "warn",
+      step,
+      message: "Recovered interrupted running step after server restart",
+    });
+  }
+}
+
+function failCurrentRunningStep(jobId: string, error: string): void {
+  const latest = loadJob(jobId);
+  const currentStep = latest?.workflow.currentStep;
+  if (!latest || !currentStep) return;
+  if (latest.workflow.steps[currentStep]?.status === "running") {
+    setJobStep(jobId, currentStep, "failed", { error });
+  }
+}
+
+function cancelJobRunsForJob(jobId: string, reason: string): void {
+  for (let index = jobRunQueue.length - 1; index >= 0; index -= 1) {
+    const run = jobRunQueue[index];
+    if (run.jobId !== jobId) continue;
+    jobRunQueue.splice(index, 1);
+    run.status = "cancelled";
+    run.finishedAt = Date.now();
+    jobRunHistory.push(run);
+    appendJobEvent({
+      jobId,
+      level: "warn",
+      message: reason,
+      data: { runId: run.id },
+    });
+  }
+
+  if (activeJobRun?.jobId === jobId) {
+    cancelledJobRunIds.add(activeJobRun.id);
+    activeJobRun.abortController?.abort();
+    if (currentRender?.taskId === jobId) {
+      currentRender.abortController?.abort();
+    }
+    appendJobEvent({
+      jobId,
+      level: "warn",
+      message: reason,
+      data: { runId: activeJobRun.id },
+    });
+  }
+}
+
+async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Record<string, unknown>> {
+  const job = loadJob(jobId);
+  if (!job) {
+    throw new Error("Job not found");
+  }
+
+  const steps = options.steps.length ? options.steps : ["download", "normalize", "render"];
+  const results: Record<string, unknown> = {};
+
+  try {
+    if (steps.includes("download")) {
+      const adapter = resolveSourceAdapter(job.source.url, job.source.platform);
+      if (!adapter?.download) {
+        throw new Error(`${job.source.platform} download adapter is not implemented yet`);
+      }
+      setJobStep(job.id, "downloading-source", "running", { percent: 0 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "downloading-source",
+        message: "Source download started",
+        data: { platform: job.source.platform },
+      });
+      results.download = await adapter.download({
+        url: job.source.url,
+        outputDir: job.artifacts.sourceDir,
+        options: job.options,
+        formatId: options.formatId,
+        signal: options.signal,
+      });
+      const latest = loadJob(job.id) || job;
+      latest.source.metadata = { ...latest.source.metadata, assets: results.download };
+      saveJob(latest);
+      setJobStep(job.id, "downloading-source", "completed", { percent: 100 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "downloading-source",
+        message: "Source download completed",
+        data: { assets: results.download },
+      });
+    }
+
+    if (steps.includes("normalize")) {
+      const latest = loadJob(job.id) || job;
+      setJobStep(job.id, "normalizing-assets", "running", { percent: 0 });
+      results.normalize = normalizeJobAssets(latest);
+      const next = loadJob(job.id) || latest;
+      next.source.metadata = { ...next.source.metadata, normalizedAssets: results.normalize };
+      saveJob(next);
+      setJobStep(job.id, "normalizing-assets", "completed", { percent: 100 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "normalizing-assets",
+        message: "Assets normalized",
+        data: { normalizedAssets: results.normalize },
+      });
+    }
+
+    if (steps.includes("translate")) {
+      const latest = loadJob(job.id) || job;
+      setJobStep(job.id, "translating-assets", "running", { percent: 0 });
+      const translation = await translateJobAssets(latest);
+      const next = loadJob(job.id) || latest;
+      next.source.metadata = { ...next.source.metadata, translation };
+      saveJob(next);
+      results.translate = translation;
+      const skipped =
+        translation.comments.status === "skipped" && translation.subtitles.status === "skipped";
+      setJobStep(job.id, "translating-assets", skipped ? "skipped" : "completed", { percent: 100 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "translating-assets",
+        message: skipped ? "No translatable assets found" : "Assets translated",
+        data: { translation },
+      });
+    }
+
+    if (steps.includes("render")) {
+      const latest = loadJob(job.id) || job;
+      if (currentRender) {
+        throw new Error("已有任务正在渲染中，请等待完成后再试");
+      }
+      const abortController = new AbortController();
+      currentRender = { name: job.id, progress: null, abortController, taskId: job.id };
+      setJobStep(job.id, "rendering-video", "running", { percent: 0 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "rendering-video",
+        message: "Job render started",
+      });
+      try {
+        const renderResult = await renderJob(
+          latest,
+          (progress) => {
+            if (currentRender) currentRender.progress = progress;
+            setJobStep(job.id, "rendering-video", "running", { percent: progress.percent });
+          },
+          abortController.signal
+        );
+        results.render = renderResult;
+        const next = loadJob(job.id) || latest;
+        next.artifacts.outputVideo = renderResult.outputPath;
+        next.artifacts.coverImage = renderResult.coverPath;
+        saveJob(next);
+        setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
+        appendJobEvent({
+          jobId: job.id,
+          level: "info",
+          step: "rendering-video",
+          message: "Job render completed",
+          data: { ...renderResult },
+        });
+      } finally {
+        currentRender = null;
+      }
+    }
+
+    if (steps.includes("generate-drafts")) {
+      const latest = loadJob(job.id) || job;
+      setJobStep(job.id, "generating-platform-drafts", "running", { percent: 0 });
+      latest.targets = await generateDrafts(latest);
+      saveJob(latest);
+      setJobStep(job.id, "generating-platform-drafts", "completed", { percent: 100 });
+      results.generateDrafts = latest.targets;
+    }
+
+    if (steps.includes("preflight-publish")) {
+      const latest = loadJob(job.id) || job;
+      setJobStep(job.id, "preflighting-targets", "running", { percent: 0 });
+      const preflightResults: Record<string, unknown> = {};
+      for (const target of latest.targets) {
+        const previousStatus = target.status;
+        target.status = "preflighting";
+        const preflight = await preflightJobTarget(latest, target.platform);
+        preflightResults[target.platform] = preflight;
+        if (!preflight.ok) {
+          target.status = "failed";
+          target.error = preflight.message;
+        } else {
+          target.status = previousStatus === "published" ? "published" : target.draft ? "drafted" : "pending";
+          delete target.error;
+        }
+      }
+      saveJob(latest);
+      results.preflight = preflightResults;
+      setJobStep(job.id, "preflighting-targets", "completed", { percent: 100 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "preflighting-targets",
+        message: "Publish preflight completed",
+        data: { results: preflightResults },
+      });
+    }
+
+    if (steps.includes("publish")) {
+      const latest = loadJob(job.id) || job;
+      setJobStep(job.id, "publishing-targets", "running", { percent: 0 });
+      const publishResults: Record<string, unknown> = {};
+      for (const target of latest.targets) {
+        if (target.status === "published" && !options.force) {
+          publishResults[target.platform] = { skipped: true, reason: "already published" };
+          continue;
+        }
+        target.status = "publishing";
+        saveJob(latest);
+        const result = await publishJobTarget(latest, target.platform, Boolean(options.force));
+        target.result = result;
+        target.status = result.success ? "published" : "failed";
+        if (result.error) target.error = result.error;
+        else delete target.error;
+        publishResults[target.platform] = result;
+        saveJob(latest);
+      }
+      results.publish = publishResults;
+      setJobStep(job.id, "publishing-targets", "completed", { percent: 100 });
+      markCompletedIfAllTargetsPublished(job.id);
+    }
+  } catch (err) {
+    currentRender = null;
+    const message = err instanceof Error ? err.message : String(err);
+    failCurrentRunningStep(job.id, message);
+    throw err;
+  }
+
+  return results;
+}
+
+async function processJobRunQueue(): Promise<void> {
+  if (activeJobRun) return;
+  const run = jobRunQueue.shift();
+  if (!run) return;
+
+  activeJobRun = run;
+  if (cancelledJobRunIds.has(run.id)) {
+    run.status = "cancelled";
+    run.finishedAt = Date.now();
+    cancelledJobRunIds.delete(run.id);
+    activeJobRun = null;
+    jobRunHistory.push(run);
+    void processJobRunQueue();
+    return;
+  }
+
+  run.status = "running";
+  run.startedAt = Date.now();
+  run.abortController = new AbortController();
+  appendJobEvent({
+    jobId: run.jobId,
+    level: "info",
+    message: "Background job run started",
+    data: { runId: run.id, steps: run.steps },
+  });
+
+  try {
+    await executeJobRun(run.jobId, {
+      steps: run.steps,
+      force: run.force,
+      formatId: run.formatId,
+      signal: run.abortController.signal,
+    });
+    run.status = cancelledJobRunIds.has(run.id) ? "cancelled" : "completed";
+    appendJobEvent({
+      jobId: run.jobId,
+      level: run.status === "completed" ? "info" : "warn",
+      message: run.status === "completed" ? "Background job run completed" : "Background job run cancelled",
+      data: { runId: run.id, steps: run.steps },
+    });
+  } catch (err) {
+    run.status = cancelledJobRunIds.has(run.id) ? "cancelled" : "failed";
+    run.error = err instanceof Error ? err.message : String(err);
+    appendJobEvent({
+      jobId: run.jobId,
+      level: run.status === "failed" ? "error" : "warn",
+      message: run.status === "failed" ? "Background job run failed" : "Background job run cancelled",
+      data: { runId: run.id, error: run.error },
+    });
+  } finally {
+    run.finishedAt = Date.now();
+    cancelledJobRunIds.delete(run.id);
+    jobRunHistory.push(run);
+    activeJobRun = null;
+    void processJobRunQueue();
+  }
+}
+
+function enqueueJobRun(
+  jobId: string,
+  options: { steps?: string[]; force?: boolean; formatId?: string } = {}
+): QueuedJobRun {
+  const existing =
+    activeJobRun?.jobId === jobId
+      ? activeJobRun
+      : jobRunQueue.find((run) => run.jobId === jobId && run.status === "queued");
+  if (existing) return existing;
+
+  const run: QueuedJobRun = {
+    id: `${jobId}_${Date.now()}`,
+    jobId,
+    steps: options.steps?.length ? options.steps : defaultRunSteps(),
+    force: options.force,
+    formatId: options.formatId,
+    status: "queued",
+    createdAt: Date.now(),
+  };
+  jobRunQueue.push(run);
+  appendJobEvent({
+    jobId,
+    level: "info",
+    message: "Background job run queued",
+    data: { runId: run.id, steps: run.steps },
+  });
+  void processJobRunQueue();
+  return run;
+}
+
 // Serve static UI files
 const ui_dir = path.join(__dirname, "ui");
 app.use(express.static(ui_dir));
@@ -54,6 +488,727 @@ app.use(express.static(ui_dir));
 // Serve rendered output files
 const outDir = path.join(process.cwd(), "out");
 app.use("/out", express.static(outDir));
+
+// ============================================================
+// Cross-platform Job API
+// ============================================================
+
+async function createJobFromRequest(body: CreateJobRequest) {
+  if (!body.source?.url) {
+    throw new Error("source.url is required");
+  }
+
+  const adapter = resolveSourceAdapter(body.source.url, body.source.platform || "auto");
+  if (!adapter) {
+    throw new Error(`No source adapter matched url: ${body.source.url}`);
+  }
+  if (!adapter.implemented) {
+    const err = new Error(`${adapter.platform} source adapter is not implemented yet`);
+    err.name = "NotImplemented";
+    throw err;
+  }
+
+  const settings = loadSettings();
+  const probe = await adapter.probe(body.source.url);
+  cancelJobRunsForJob(createJobId(probe.platform, probe.contentId), "Existing run cancelled before recreating job");
+  const repeatTimes = Math.min(10, Math.max(1, Number(body.options?.repeatTimes || 1)));
+  const targetCommentCount = calculateTargetCommentCount(probe.durationSec, repeatTimes, settings);
+  const targets: NonNullable<CreateJobRequest["targets"]> =
+    body.targets?.length
+      ? body.targets
+      : settings.publishing.defaultPlatforms.map((platform) => ({ platform }));
+  const job = createJob(body, probe.platform, probe.contentId);
+  job.source = {
+    ...job.source,
+    platform: probe.platform,
+    contentId: probe.contentId,
+    author: probe.author,
+    language: probe.language,
+    metadata: {
+      title: probe.title,
+      durationSec: probe.durationSec,
+      recommended: probe.recommended,
+      raw: probe.raw,
+    },
+  };
+  job.targets = targets.map((target) => {
+    const existing = job.targets.find((item) => item.platform === target.platform);
+    return {
+      platform: target.platform,
+      status: existing?.status || "pending",
+      ...(target.draft ? { draft: target.draft } : existing?.draft ? { draft: existing.draft } : {}),
+      ...(existing?.result ? { result: existing.result } : {}),
+      ...(existing?.error ? { error: existing.error } : {}),
+    };
+  });
+  job.options = {
+    ...job.options,
+    targetLanguage: body.options?.targetLanguage || settings.production.subtitleTargetLanguage,
+    downloadQuality: body.options?.downloadQuality || job.options.downloadQuality || "auto",
+    ...body.options,
+    repeatTimes,
+    targetCommentCount,
+  };
+  job.settingsSnapshot = settings;
+  saveJob(job);
+  setJobStep(job.id, "probing-source", "completed", { percent: 100 });
+  appendJobEvent({
+    jobId: job.id,
+    level: "info",
+    step: "probing-source",
+    message: `Source probed via ${probe.platform}`,
+    data: { title: probe.title, contentId: probe.contentId },
+  });
+
+  return { job: loadJob(job.id) || job, probe };
+}
+
+app.get("/api/platforms", (_req, res) => {
+  res.json(listPlatformCapabilities());
+});
+
+app.get("/api/health", async (_req, res) => {
+  res.json(await getSystemHealth());
+});
+
+app.get("/api/settings", (_req, res) => {
+  res.json({ success: true, settings: loadSettings() });
+});
+
+app.put("/api/settings", (req, res) => {
+  try {
+    res.json({ success: true, settings: saveSettings(req.body || {}) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/sources/probe", async (req, res) => {
+  try {
+    const { url, platform = "auto" } = req.body as { url?: string; platform?: string };
+    if (!url) {
+      res.status(400).json({ error: "url is required" });
+      return;
+    }
+
+    const adapter = resolveSourceAdapter(url, platform);
+    if (!adapter) {
+      res.status(400).json({ error: `No source adapter matched url: ${url}` });
+      return;
+    }
+    if (!adapter.implemented) {
+      res.status(501).json({ error: `${adapter.platform} source adapter is not implemented yet` });
+      return;
+    }
+
+    const probe = await adapter.probe(url);
+    res.json({ success: true, probe });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/download/formats", async (req, res) => {
+  try {
+    const url = String(req.query.url || "");
+    const platform = String(req.query.platform || "auto");
+    if (!url) {
+      res.status(400).json({ error: "url query parameter is required" });
+      return;
+    }
+
+    const adapter = resolveSourceAdapter(url, platform);
+    if (!adapter) {
+      res.status(400).json({ error: `No source adapter matched url: ${url}` });
+      return;
+    }
+    if (!adapter.implemented) {
+      res.status(501).json({ error: `${adapter.platform} source adapter is not implemented yet` });
+      return;
+    }
+
+    const probe = await adapter.probe(url);
+    res.json(probe);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs", async (req, res) => {
+  try {
+    const body = req.body as CreateJobRequest;
+    const result = await createJobFromRequest(body);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
+    res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/workflows/youtube", async (req, res) => {
+  try {
+    const body: CreateJobRequest = {
+      source: { url: req.body?.url || req.body?.source?.url, platform: "youtube" },
+      targets: req.body?.targets,
+      options: req.body?.options,
+      requirement: req.body?.requirement,
+    };
+    const result = await createJobFromRequest(body);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const status = err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
+    res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/jobs", (_req, res) => {
+  res.json({ jobs: listJobs() });
+});
+
+app.get("/api/jobs/queue", (_req, res) => {
+  res.json(snapshotQueue());
+});
+
+app.get("/api/jobs/:jobId", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  res.json({ success: true, job });
+});
+
+app.get("/api/jobs/:jobId/events", (req, res) => {
+  res.json({ events: getJobEvents(req.params.jobId) });
+});
+
+app.get("/api/jobs/:jobId/artifact", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  const artifactPath = typeof req.query.path === "string" ? req.query.path : "";
+  const resolvedPath = path.resolve(artifactPath);
+  const rootDir = path.resolve(job.artifacts.rootDir);
+  if (!artifactPath || !resolvedPath.startsWith(rootDir + path.sep) || !fs.existsSync(resolvedPath)) {
+    res.status(404).json({ error: "Artifact not found" });
+    return;
+  }
+  if (/\.json$/i.test(resolvedPath)) {
+    res.json(JSON.parse(fs.readFileSync(resolvedPath, "utf-8")));
+    return;
+  }
+  res.type(path.extname(resolvedPath) || "text/plain").sendFile(resolvedPath);
+});
+
+app.post("/api/jobs/:jobId/start", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : undefined;
+  const run = enqueueJobRun(job.id, {
+    steps,
+    force: Boolean(req.body?.force),
+    formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
+  });
+  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run, queue: snapshotQueue() });
+});
+
+app.post("/api/jobs/:jobId/retry", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  const current = job.workflow.currentStep;
+  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(current);
+  const run = enqueueJobRun(job.id, {
+    steps,
+    force: Boolean(req.body?.force),
+    formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
+  });
+  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run, queue: snapshotQueue() });
+});
+
+app.post("/api/jobs/:jobId/cancel", (req, res) => {
+  const jobId = req.params.jobId;
+  const queuedIndex = jobRunQueue.findIndex((run) => run.jobId === jobId);
+  if (queuedIndex !== -1) {
+    const [run] = jobRunQueue.splice(queuedIndex, 1);
+    run.status = "cancelled";
+    run.finishedAt = Date.now();
+    jobRunHistory.push(run);
+    appendJobEvent({
+      jobId,
+      level: "warn",
+      message: "Queued background job run cancelled",
+      data: { runId: run.id },
+    });
+    res.json({ success: true, run, queue: snapshotQueue() });
+    return;
+  }
+
+  if (activeJobRun?.jobId === jobId) {
+    cancelledJobRunIds.add(activeJobRun.id);
+    activeJobRun.abortController?.abort();
+    if (currentRender?.taskId === jobId) {
+      currentRender.abortController?.abort();
+    }
+    appendJobEvent({
+      jobId,
+      level: "warn",
+      message: "Cancellation requested for running background job",
+      data: { runId: activeJobRun.id },
+    });
+    res.json({ success: true, run: activeJobRun, queue: snapshotQueue() });
+    return;
+  }
+
+  res.status(404).json({ error: "No queued or running job run found" });
+});
+
+app.post("/api/jobs/:jobId/download", async (req, res) => {
+  try {
+    let job = loadJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    const adapter = resolveSourceAdapter(job.source.url, job.source.platform);
+    if (!adapter?.download) {
+      res.status(501).json({ error: `${job.source.platform} download adapter is not implemented yet` });
+      return;
+    }
+
+    setJobStep(job.id, "downloading-source", "running", { percent: 0 });
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "downloading-source",
+      message: "Source download started",
+      data: { platform: job.source.platform },
+    });
+
+    const assets = await adapter.download({
+      url: job.source.url,
+      outputDir: job.artifacts.sourceDir,
+      options: job.options,
+      formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
+    });
+
+    const latest = loadJob(job.id) || job;
+    latest.source.metadata = {
+      ...latest.source.metadata,
+      assets,
+    };
+    saveJob(latest);
+    setJobStep(job.id, "downloading-source", "completed", { percent: 100 });
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "downloading-source",
+      message: "Source download completed",
+      data: { assets },
+    });
+
+    res.json({ success: true, job: loadJob(job.id), assets });
+  } catch (err) {
+    setJobStep(req.params.jobId, "downloading-source", "failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    appendJobEvent({
+      jobId: req.params.jobId,
+      level: "error",
+      step: "downloading-source",
+      message: "Source download failed",
+      data: { error: err instanceof Error ? err.message : String(err) },
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/normalize", (req, res) => {
+  try {
+    let job = loadJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    setJobStep(job.id, "normalizing-assets", "running", { percent: 0 });
+    const normalizedAssets = normalizeJobAssets(job);
+    const latest = loadJob(job.id) || job;
+    latest.source.metadata = {
+      ...latest.source.metadata,
+      normalizedAssets,
+    };
+    saveJob(latest);
+    setJobStep(job.id, "normalizing-assets", "completed", { percent: 100 });
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "normalizing-assets",
+      message: "Assets normalized",
+      data: { normalizedAssets },
+    });
+
+    res.json({ success: true, job: loadJob(job.id), normalizedAssets });
+  } catch (err) {
+    setJobStep(req.params.jobId, "normalizing-assets", "failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    appendJobEvent({
+      jobId: req.params.jobId,
+      level: "error",
+      step: "normalizing-assets",
+      message: "Asset normalization failed",
+      data: { error: err instanceof Error ? err.message : String(err) },
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/render", async (req, res) => {
+  try {
+    const job = loadJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    if (currentRender) {
+      res.status(409).json({ error: "已有任务正在渲染中，请等待完成后再试", currentRender });
+      return;
+    }
+
+    const abortController = new AbortController();
+    currentRender = { name: job.id, progress: null, abortController, taskId: job.id };
+    setJobStep(job.id, "rendering-video", "running", { percent: 0 });
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "rendering-video",
+      message: "Job render started",
+    });
+
+    const handleProgress = (progress: { stage: string; percent: number; message: string }) => {
+      if (currentRender) currentRender.progress = progress;
+      setJobStep(job.id, "rendering-video", "running", { percent: progress.percent });
+    };
+
+    try {
+      const result = await renderJob(job, handleProgress, abortController.signal);
+      const latest = loadJob(job.id) || job;
+      latest.artifacts.outputVideo = result.outputPath;
+      latest.artifacts.coverImage = result.coverPath;
+      saveJob(latest);
+      setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "rendering-video",
+        message: "Job render completed",
+        data: { ...result },
+      });
+      res.json({ success: true, job: loadJob(job.id), result });
+    } catch (err) {
+      setJobStep(job.id, "rendering-video", "failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      appendJobEvent({
+        jobId: job.id,
+        level: "error",
+        step: "rendering-video",
+        message: "Job render failed",
+        data: { error: err instanceof Error ? err.message : String(err) },
+      });
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      currentRender = null;
+    }
+  } catch (err) {
+    currentRender = null;
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/run", async (req, res) => {
+  try {
+    const job = loadJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    const steps: string[] = Array.isArray(req.body?.steps)
+      ? req.body.steps
+      : ["download", "normalize", "render"];
+    const results = await executeJobRun(job.id, {
+      steps,
+      force: Boolean(req.body?.force),
+      formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
+    });
+
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      message: "Job runner completed requested steps",
+      data: { steps },
+    });
+    res.json({ success: true, job: loadJob(job.id), results });
+  } catch (err) {
+    currentRender = null;
+    appendJobEvent({
+      jobId: req.params.jobId,
+      level: "error",
+      message: "Job runner failed",
+      data: { error: err instanceof Error ? err.message : String(err) },
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/translate", async (req, res) => {
+  try {
+    const job = loadJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    setJobStep(job.id, "translating-assets", "running", { percent: 0 });
+    const translation = await translateJobAssets(job);
+    const latest = loadJob(job.id) || job;
+    latest.source.metadata = { ...latest.source.metadata, translation };
+    saveJob(latest);
+    const skipped =
+      translation.comments.status === "skipped" && translation.subtitles.status === "skipped";
+    setJobStep(job.id, "translating-assets", skipped ? "skipped" : "completed", { percent: 100 });
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "translating-assets",
+      message: skipped ? "No translatable assets found" : "Assets translated",
+      data: { translation },
+    });
+    res.json({ success: true, job: loadJob(job.id), translation });
+  } catch (err) {
+    setJobStep(req.params.jobId, "translating-assets", "failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    appendJobEvent({
+      jobId: req.params.jobId,
+      level: "error",
+      step: "translating-assets",
+      message: "Translation failed",
+      data: { error: err instanceof Error ? err.message : String(err) },
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/drafts/generate", async (req, res) => {
+  try {
+    const job = loadJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    setJobStep(job.id, "generating-platform-drafts", "running", { percent: 0 });
+    job.targets = await generateDrafts(job);
+    saveJob(job);
+    setJobStep(job.id, "generating-platform-drafts", "completed", { percent: 100 });
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "generating-platform-drafts",
+      message: "Platform drafts generated",
+    });
+    res.json({ success: true, job: loadJob(job.id), targets: job.targets });
+  } catch (err) {
+    setJobStep(req.params.jobId, "generating-platform-drafts", "failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/preflight-publish", async (req, res) => {
+  try {
+    const job = loadJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    setJobStep(job.id, "preflighting-targets", "running", { percent: 0 });
+    const results: Record<string, unknown> = {};
+    for (const target of job.targets) {
+      const previousStatus = target.status;
+      target.status = "preflighting";
+      const result = await preflightJobTarget(job, target.platform);
+      results[target.platform] = result;
+      if (!result.ok) {
+        target.status = "failed";
+        target.error = result.message;
+      } else if (previousStatus !== "published") {
+        target.status = target.draft ? "drafted" : "pending";
+        delete target.error;
+      }
+    }
+    saveJob(job);
+    setJobStep(job.id, "preflighting-targets", "completed", { percent: 100 });
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "preflighting-targets",
+      message: "Publish preflight completed",
+      data: { results },
+    });
+    res.json({ success: true, job: loadJob(job.id), results });
+  } catch (err) {
+    setJobStep(req.params.jobId, "preflighting-targets", "failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/publish", async (req, res) => {
+  try {
+    const initialJob = loadJob(req.params.jobId);
+    if (!initialJob) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    let job = initialJob;
+    setJobStep(job.id, "publishing-targets", "running", { percent: 0 });
+    const platforms = Array.isArray(req.body?.platforms)
+      ? req.body.platforms.map(String)
+      : job.targets.map((target) => target.platform);
+    const results: Record<string, unknown> = {};
+
+    for (const target of job.targets) {
+      if (!platforms.includes(target.platform)) continue;
+      if (target.status === "published" && !req.body?.force) {
+        results[target.platform] = { skipped: true, reason: "already published" };
+        continue;
+      }
+      job = loadJob(job.id) || job;
+      const latestTarget = job.targets.find((item) => item.platform === target.platform);
+      if (!latestTarget) continue;
+      latestTarget.status = "publishing";
+      saveJob(job);
+      const result = await publishJobTarget(job, latestTarget.platform, Boolean(req.body?.force));
+      const next = loadJob(job.id) || job;
+      const nextTarget = next.targets.find((item) => item.platform === latestTarget.platform);
+      if (!nextTarget) continue;
+      nextTarget.result = result;
+      nextTarget.status = result.success ? "published" : "failed";
+      if (result.error) nextTarget.error = result.error;
+      else delete nextTarget.error;
+      results[latestTarget.platform] = result;
+      job = next;
+      saveJob(job);
+    }
+
+    setJobStep(job.id, "publishing-targets", "completed", { percent: 100 });
+    markCompletedIfAllTargetsPublished(job.id);
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      step: "publishing-targets",
+      message: "Publish completed",
+      data: { results },
+    });
+    res.json({ success: true, job: loadJob(job.id), results });
+  } catch (err) {
+    setJobStep(req.params.jobId, "publishing-targets", "failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    appendJobEvent({
+      jobId: req.params.jobId,
+      level: "error",
+      step: "publishing-targets",
+      message: "Publish failed",
+      data: { error: err instanceof Error ? err.message : String(err) },
+    });
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ============================================================
+// Browser and translation management APIs
+// ============================================================
+
+app.get("/api/browser/status", async (_req, res) => {
+  res.json(await getBrowserStatus());
+});
+
+app.post("/api/browser/start", async (_req, res) => {
+  res.json(await startBrowser());
+});
+
+app.post("/api/browser/stop", async (_req, res) => {
+  res.json(await stopBrowser());
+});
+
+app.post("/api/browser/restart", async (_req, res) => {
+  await stopBrowser();
+  res.json(await startBrowser());
+});
+
+app.get("/api/browser/health", async (_req, res) => {
+  res.json(await getBrowserHealth());
+});
+
+app.get("/api/browser/login/:platform", async (req, res) => {
+  try {
+    const platform = req.params.platform as "bilibili" | "douyin";
+    if (!["bilibili", "douyin"].includes(platform)) {
+      res.status(400).json({ error: "Unsupported platform" });
+      return;
+    }
+    res.json(await checkPlatformLogin(platform));
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/browser/open-login/:platform", async (req, res) => {
+  try {
+    const platform = req.params.platform as "bilibili" | "douyin";
+    if (!["bilibili", "douyin"].includes(platform)) {
+      res.status(400).json({ error: "Unsupported platform" });
+      return;
+    }
+    res.json(await openPlatformLogin(platform));
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/translate/providers", (_req, res) => {
+  res.json({ providers: listTranslateProviders() });
+});
+
+app.post("/api/translate/test", async (req, res) => {
+  try {
+    const translated = await translateText({
+      text: req.body?.text || "Hello world",
+      sourceLanguage: req.body?.sourceLanguage,
+      targetLanguage: req.body?.targetLanguage || "zh-CN",
+      systemPrompt: req.body?.systemPrompt,
+    });
+    res.json({ success: true, translated });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
 
 // ============================================================
 // Agent API: single endpoint to render a video folder
@@ -74,8 +1229,9 @@ app.get("/api/test-browser", async (req, res) => {
     await browser.close({ silent: true });
     res.json({ success: true });
   } catch(e) {
-    fs.default.appendFileSync("/tmp/express-ob-test.log", "FAIL: " + e.message.substring(0, 2000) + "\n");
-    res.status(500).json({ error: e.message.substring(0, 500) });
+    const message = e instanceof Error ? e.message : String(e);
+    fs.default.appendFileSync("/tmp/express-ob-test.log", "FAIL: " + message.substring(0, 2000) + "\n");
+    res.status(500).json({ error: message.substring(0, 500) });
   }
 });
 
@@ -514,6 +1670,7 @@ app.post("/api/tasks/cleanup", (_req, res) => {
 
 app.listen(PORT, () => {
   syncRenderStatus();
+  recoverInterruptedJobRuns();
   console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
   console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }`);
   console.log(`  Agent API: POST /api/publish        { "videoPath": "...", "platforms": ["bilibili","douyin"] }`);
