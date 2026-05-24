@@ -32,7 +32,7 @@ export type JobStep =
   | "failed"
   | "cancelled";
 
-export type StepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+export type StepStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "paused";
 export type TargetStatus =
   | "pending"
   | "drafted"

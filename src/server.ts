@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { execSync, spawn, type ChildProcess } from "child_process";
 import { getDirs, getDirByName, render, preparePublicDir } from "./renderer";
 import { scanDir } from "./scan-dir";
 import { publish, type PublishRequest } from "./publish";
@@ -13,13 +14,14 @@ import {
 import {
   createJob,
   createJobId,
+  deleteJob,
   listJobs,
   loadJob,
   saveJob,
   setJobStep,
 } from "./jobs/store";
 import { normalizeJobAssets } from "./jobs/normalize";
-import { renderJob } from "./jobs/render-job";
+import { buildJobDirInfo, renderJob } from "./jobs/render-job";
 import { translateJobAssets } from "./jobs/translate-job";
 import type { CreateJobRequest, JobStep } from "./jobs/types";
 import { generateDrafts } from "./jobs/drafts";
@@ -67,7 +69,7 @@ interface QueuedJobRun {
   steps: string[];
   force?: boolean;
   formatId?: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | "paused";
   createdAt: number;
   startedAt?: number;
   finishedAt?: number;
@@ -82,15 +84,45 @@ interface JobRunOptions {
   signal?: AbortSignal;
 }
 
+interface ScheduledPublishRun {
+  jobId: string;
+  runAt: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 const jobRunQueue: QueuedJobRun[] = [];
 const jobRunHistory: QueuedJobRun[] = [];
 const cancelledJobRunIds = new Set<string>();
+const pausedJobRunIds = new Set<string>();
+const scheduledPublishRuns = new Map<string, ScheduledPublishRun>();
 let activeJobRun: QueuedJobRun | null = null;
+let studioPreviewProcess: ChildProcess | null = null;
+let studioPreviewJobId: string | null = null;
 
 const app = express();
 const PORT = SERVER_PORT;
+const CRASH_LOG_FILE = path.join(process.cwd(), "data", "server-crash.log");
 
 app.use(express.json());
+
+function appendCrashLog(message: string, data?: unknown): void {
+  try {
+    fs.mkdirSync(path.dirname(CRASH_LOG_FILE), { recursive: true });
+    fs.appendFileSync(
+      CRASH_LOG_FILE,
+      JSON.stringify({ ts: new Date().toISOString(), message, data }, null, 0) + "\n"
+    );
+  } catch {}
+}
+
+process.on("uncaughtException", (err) => {
+  appendCrashLog("uncaughtException", err instanceof Error ? { message: err.message, stack: err.stack } : err);
+  throw err;
+});
+
+process.on("unhandledRejection", (reason) => {
+  appendCrashLog("unhandledRejection", reason instanceof Error ? { message: reason.message, stack: reason.stack } : reason);
+});
 
 // SSE helpers
 function isSSERequest(req: express.Request): boolean {
@@ -122,55 +154,280 @@ function markCompletedIfAllTargetsPublished(jobId: string): void {
   }
 }
 
+function existingRenderResult(job: NonNullable<ReturnType<typeof loadJob>>) {
+  const outputPath = path.resolve(process.cwd(), "out", `${job.id}.mp4`);
+  if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) return null;
+  const coverPath = path.resolve(process.cwd(), "out", `${job.id}-cover.jpg`);
+  const normalized = job.source.metadata?.normalizedAssets as { durationSec?: number } | undefined;
+  const durationSec = Math.max(0, Number(normalized?.durationSec || job.source.metadata?.durationSec || 0)) *
+    Math.min(10, Math.max(1, Number(job.options.repeatTimes || 1)));
+  return {
+    outputPath,
+    coverPath: fs.existsSync(coverPath) ? coverPath : undefined,
+    durationSec,
+  };
+}
+
 function snapshotQueue() {
   return {
     active: activeJobRun,
     queued: jobRunQueue,
+    scheduled: Array.from(scheduledPublishRuns.values()).map((run) => ({
+      jobId: run.jobId,
+      runAt: run.runAt,
+    })),
     recent: jobRunHistory.slice(-20).reverse(),
   };
 }
 
 function defaultRunSteps(): string[] {
-  return ["download", "normalize", "translate", "render", "generate-drafts", "preflight-publish"];
+  const steps = ["download", "normalize", "translate", "render", "generate-drafts", "preflight-publish"];
+  return loadSettings().publishing.scheduleMode === "immediate" ? [...steps, "publish"] : steps;
 }
 
-function runStepsFromJobStep(step: JobStep): string[] {
+function withConfiguredPublishStep(steps: string[]): string[] {
+  return loadSettings().publishing.scheduleMode === "immediate" && !steps.includes("publish")
+    ? [...steps, "publish"]
+    : steps;
+}
+
+function runStepsFromJobStep(step: JobStep, status?: string): string[] {
+  const stepCompleted = status === "completed" || status === "skipped";
   if (step === "downloading-source") return defaultRunSteps();
-  if (step === "normalizing-assets") return ["normalize", "translate", "render", "generate-drafts", "preflight-publish"];
-  if (step === "translating-assets" || step === "moderating-assets") return ["translate", "render", "generate-drafts", "preflight-publish"];
-  if (step === "rendering-video") return ["render", "generate-drafts", "preflight-publish"];
-  if (step === "generating-platform-drafts") return ["generate-drafts", "preflight-publish"];
-  if (step === "preflighting-targets") return ["preflight-publish"];
+  if (step === "normalizing-assets") return withConfiguredPublishStep(stepCompleted ? ["translate", "render", "generate-drafts", "preflight-publish"] : ["normalize", "translate", "render", "generate-drafts", "preflight-publish"]);
+  if (step === "translating-assets" || step === "moderating-assets") return withConfiguredPublishStep(stepCompleted ? ["render", "generate-drafts", "preflight-publish"] : ["translate", "render", "generate-drafts", "preflight-publish"]);
+  if (step === "rendering-video") return withConfiguredPublishStep(stepCompleted ? ["generate-drafts", "preflight-publish"] : ["render", "generate-drafts", "preflight-publish"]);
+  if (step === "generating-platform-drafts") return withConfiguredPublishStep(stepCompleted ? ["preflight-publish"] : ["generate-drafts", "preflight-publish"]);
+  if (step === "preflighting-targets") return stepCompleted ? withConfiguredPublishStep([]) : withConfiguredPublishStep(["preflight-publish"]);
   if (step === "publishing-targets") return ["publish"];
   return defaultRunSteps();
+}
+
+function clearScheduledPublish(jobId: string): void {
+  const scheduled = scheduledPublishRuns.get(jobId);
+  if (!scheduled) return;
+  clearTimeout(scheduled.timer);
+  scheduledPublishRuns.delete(jobId);
+}
+
+function getScheduledPublishDelayMs(): number {
+  const minutes = Number(loadSettings().publishing.scheduledDelayMinutes || 0);
+  return Math.max(0, minutes) * 60 * 1000;
+}
+
+function schedulePublishRun(jobId: string, delayMs = getScheduledPublishDelayMs()): void {
+  clearScheduledPublish(jobId);
+  const runAt = Date.now() + Math.max(0, delayMs);
+  const job = loadJob(jobId);
+  if (job) {
+    job.source.metadata = {
+      ...(job.source.metadata || {}),
+      scheduledPublishAt: runAt,
+    };
+    saveJob(job);
+  }
+  setJobStep(jobId, "publishing-targets", "paused", {
+    percent: 0,
+    error: `Scheduled publish at ${new Date(runAt).toISOString()}`,
+  });
+  appendJobEvent({
+    jobId,
+    level: "info",
+    step: "publishing-targets",
+    message: "Publish scheduled",
+    data: { runAt, delayMs },
+  });
+  const timer = setTimeout(() => {
+    scheduledPublishRuns.delete(jobId);
+    enqueueJobRun(jobId, { steps: ["publish"] });
+  }, Math.max(0, delayMs));
+  scheduledPublishRuns.set(jobId, { jobId, runAt, timer });
+}
+
+function terminateRenderProcesses(): void {
+  try {
+    execSync(
+      "pkill -f 'node_modules/@remotion/compositor|node_modules/.remotion/chrome-headless-shell' || true",
+      { stdio: "ignore" }
+    );
+  } catch {
+    // Best-effort cleanup. The abort signal remains the primary cancellation path.
+  }
+}
+
+function remotionStudioPort(): number {
+  return Math.max(1, Number(process.env.REMOTION_STUDIO_PORT || 3000));
+}
+
+function pidsListeningOnPort(port: number): number[] {
+  try {
+    return execSync(`lsof -tiTCP:${port} -sTCP:LISTEN -n -P || true`, { encoding: "utf-8" })
+      .split(/\s+/)
+      .map((value) => Number(value))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function processCommand(pid: number): string {
+  try {
+    return execSync(`ps -p ${pid} -o command=`, { encoding: "utf-8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function stopRemotionStudioOnPort(port: number): void {
+  const pids = pidsListeningOnPort(port);
+  for (const pid of pids) {
+    const command = processCommand(pid);
+    if (!/remotion\s+studio|npx\s+remotion/i.test(command)) continue;
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+}
+
+function buildStudioProps(job: NonNullable<ReturnType<typeof loadJob>>, dirInfo = buildJobDirInfo(job)) {
+  const videoExt = path.extname(dirInfo.videoFile || ".mp4");
+  const normalized = job.source.metadata?.normalizedAssets as { durationSec?: number } | undefined;
+  const sourceDurationSec = Math.max(1, Number(normalized?.durationSec || job.source.metadata?.durationSec || 60));
+  const repeatTimes = Math.min(10, Math.max(1, Number(job.options.repeatTimes || 1)));
+  return {
+    dirPath: dirInfo.path,
+    videoFile: `video${videoExt}`,
+    commentFile: dirInfo.commentFile ? "comments.json" : "",
+    subtitleFiles: dirInfo.subtitleFiles.length > 0 ? [path.basename(dirInfo.subtitleFiles[0])] : [],
+    durationInFrames: Math.ceil(sourceDurationSec * repeatTimes * 30),
+    sourceVideoDurationInFrames: Math.ceil(sourceDurationSec * 30),
+  };
+}
+
+function startRemotionStudioPreview(jobId: string, studioProps: ReturnType<typeof buildStudioProps>) {
+  const port = remotionStudioPort();
+  if (studioPreviewProcess && !studioPreviewProcess.killed) {
+    studioPreviewProcess.kill("SIGTERM");
+    studioPreviewProcess = null;
+  }
+  stopRemotionStudioOnPort(port);
+
+  const logPath = path.join(process.cwd(), "data", "remotion-studio.log");
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  const log = fs.createWriteStream(logPath, { flags: "a" });
+  const child = spawn("npx", ["remotion", "studio", "--port", String(port), "--props", JSON.stringify(studioProps)], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.pipe(log, { end: false });
+  child.stderr.pipe(log, { end: false });
+  child.on("exit", () => {
+    log.end();
+    if (studioPreviewProcess === child) {
+      studioPreviewProcess = null;
+      studioPreviewJobId = null;
+    }
+  });
+  child.unref();
+  studioPreviewProcess = child;
+  studioPreviewJobId = jobId;
+
+  return {
+    studioUrl: `http://localhost:${port}`,
+    previewJobId: studioPreviewJobId,
+    logPath,
+  };
+}
+
+function assertRunNotCancelled(options: JobRunOptions): void {
+  if (options.signal?.aborted) {
+    throw new Error("Job run cancelled");
+  }
+}
+
+function hasUsableExistingTranslation(job: NonNullable<ReturnType<typeof loadJob>>): boolean {
+  const translation = job.source.metadata?.translation as
+    | {
+        comments?: { status?: string; outputPath?: string };
+        subtitles?: { status?: string; outputPaths?: string[] };
+      }
+    | undefined;
+  if (!translation) return false;
+  const commentsReady =
+    translation.comments?.status === "skipped" ||
+    Boolean(translation.comments?.outputPath && fs.existsSync(translation.comments.outputPath));
+  const subtitlesReady =
+    translation.subtitles?.status === "skipped" ||
+    Boolean(translation.subtitles?.outputPaths?.some((file) => fs.existsSync(file)));
+  return commentsReady && subtitlesReady;
 }
 
 function recoverInterruptedJobRuns(): void {
   for (const job of listJobs()) {
     const step = job.workflow.currentStep;
-    if (job.workflow.steps[step]?.status !== "running") continue;
-    setJobStep(job.id, step, "failed", {
-      error: "Server restarted while this step was running",
-    });
-    appendJobEvent({
-      jobId: job.id,
-      level: "warn",
-      step,
-      message: "Recovered interrupted running step after server restart",
-    });
+    if (step === "publishing-targets" && job.workflow.steps[step]?.status === "paused") {
+      const runAt = Number(job.source.metadata?.scheduledPublishAt || 0);
+      if (runAt > 0) schedulePublishRun(job.id, Math.max(0, runAt - Date.now()));
+      continue;
+    }
+    if (job.workflow.steps[step]?.status === "running") {
+      if (step === "rendering-video") {
+        const renderResult = existingRenderResult(job);
+        if (renderResult) {
+          const latest = loadJob(job.id) || job;
+          latest.artifacts.outputVideo = renderResult.outputPath;
+          latest.artifacts.coverImage = renderResult.coverPath;
+          saveJob(latest);
+          setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
+          appendJobEvent({
+            jobId: job.id,
+            level: "warn",
+            step,
+            message: "Recovered completed render output after server restart",
+            data: renderResult,
+          });
+          continue;
+        }
+      }
+      setJobStep(job.id, step, "failed", {
+        error: "Server restarted while this step was running",
+      });
+      appendJobEvent({
+        jobId: job.id,
+        level: "warn",
+        step,
+        message: "Recovered interrupted running step after server restart",
+      });
+    }
   }
 }
 
-function failCurrentRunningStep(jobId: string, error: string): void {
+function failCurrentRunningStep(jobId: string, error: string): boolean {
+  const latest = loadJob(jobId);
+  const currentStep = latest?.workflow.currentStep;
+  if (!latest || !currentStep) return false;
+  if (latest.workflow.steps[currentStep]?.status === "running") {
+    setJobStep(jobId, currentStep, "failed", { error });
+    return true;
+  }
+  return false;
+}
+
+function pauseCurrentRunningStep(jobId: string, reason: string): void {
   const latest = loadJob(jobId);
   const currentStep = latest?.workflow.currentStep;
   if (!latest || !currentStep) return;
   if (latest.workflow.steps[currentStep]?.status === "running") {
-    setJobStep(jobId, currentStep, "failed", { error });
+    setJobStep(jobId, currentStep, "paused", {
+      percent: latest.workflow.steps[currentStep]?.percent || 0,
+      error: reason,
+    });
   }
 }
 
 function cancelJobRunsForJob(jobId: string, reason: string): void {
+  clearScheduledPublish(jobId);
   for (let index = jobRunQueue.length - 1; index >= 0; index -= 1) {
     const run = jobRunQueue[index];
     if (run.jobId !== jobId) continue;
@@ -191,7 +448,9 @@ function cancelJobRunsForJob(jobId: string, reason: string): void {
     activeJobRun.abortController?.abort();
     if (currentRender?.taskId === jobId) {
       currentRender.abortController?.abort();
+      terminateRenderProcesses();
     }
+    setJobStep(jobId, "cancelled", "completed", { percent: 100 });
     appendJobEvent({
       jobId,
       level: "warn",
@@ -201,16 +460,56 @@ function cancelJobRunsForJob(jobId: string, reason: string): void {
   }
 }
 
+function pauseJobRunsForJob(jobId: string, reason: string): QueuedJobRun | null {
+  clearScheduledPublish(jobId);
+  const queuedIndex = jobRunQueue.findIndex((run) => run.jobId === jobId);
+  if (queuedIndex !== -1) {
+    const [run] = jobRunQueue.splice(queuedIndex, 1);
+    run.status = "paused";
+    run.finishedAt = Date.now();
+    jobRunHistory.push(run);
+    pauseCurrentRunningStep(jobId, reason);
+    appendJobEvent({
+      jobId,
+      level: "warn",
+      message: reason,
+      data: { runId: run.id },
+    });
+    return run;
+  }
+
+  if (activeJobRun?.jobId === jobId) {
+    pausedJobRunIds.add(activeJobRun.id);
+    activeJobRun.abortController?.abort();
+    if (currentRender?.taskId === jobId) {
+      currentRender.abortController?.abort();
+      terminateRenderProcesses();
+    }
+    pauseCurrentRunningStep(jobId, reason);
+    appendJobEvent({
+      jobId,
+      level: "warn",
+      message: reason,
+      data: { runId: activeJobRun.id },
+    });
+    return activeJobRun;
+  }
+
+  pauseCurrentRunningStep(jobId, reason);
+  return null;
+}
+
 async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Record<string, unknown>> {
   const job = loadJob(jobId);
   if (!job) {
     throw new Error("Job not found");
   }
 
-  const steps = options.steps.length ? options.steps : ["download", "normalize", "render"];
+  const steps = options.steps.length ? options.steps : defaultRunSteps();
   const results: Record<string, unknown> = {};
 
   try {
+    assertRunNotCancelled(options);
     if (steps.includes("download")) {
       const adapter = resolveSourceAdapter(job.source.url, job.source.platform);
       if (!adapter?.download) {
@@ -244,6 +543,7 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
       });
     }
 
+    assertRunNotCancelled(options);
     if (steps.includes("normalize")) {
       const latest = loadJob(job.id) || job;
       setJobStep(job.id, "normalizing-assets", "running", { percent: 0 });
@@ -261,8 +561,20 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
       });
     }
 
+    assertRunNotCancelled(options);
     if (steps.includes("translate")) {
       const latest = loadJob(job.id) || job;
+      if (hasUsableExistingTranslation(latest)) {
+        results.translate = latest.source.metadata?.translation;
+        setJobStep(job.id, "translating-assets", "completed", { percent: 100 });
+        appendJobEvent({
+          jobId: job.id,
+          level: "info",
+          step: "translating-assets",
+          message: "Existing translation reused",
+          data: { translation: results.translate },
+        });
+      } else {
       setJobStep(job.id, "translating-assets", "running", { percent: 0 });
       const translation = await translateJobAssets(latest);
       const next = loadJob(job.id) || latest;
@@ -279,10 +591,27 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         message: skipped ? "No translatable assets found" : "Assets translated",
         data: { translation },
       });
+      }
     }
 
+    assertRunNotCancelled(options);
     if (steps.includes("render")) {
       const latest = loadJob(job.id) || job;
+      const reusableRender = existingRenderResult(latest);
+      if (reusableRender) {
+        latest.artifacts.outputVideo = reusableRender.outputPath;
+        latest.artifacts.coverImage = reusableRender.coverPath;
+        saveJob(latest);
+        results.render = reusableRender;
+        setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
+        appendJobEvent({
+          jobId: job.id,
+          level: "info",
+          step: "rendering-video",
+          message: "Existing rendered output reused",
+          data: reusableRender,
+        });
+      } else {
       if (currentRender) {
         throw new Error("已有任务正在渲染中，请等待完成后再试");
       }
@@ -320,8 +649,10 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
       } finally {
         currentRender = null;
       }
+      }
     }
 
+    assertRunNotCancelled(options);
     if (steps.includes("generate-drafts")) {
       const latest = loadJob(job.id) || job;
       setJobStep(job.id, "generating-platform-drafts", "running", { percent: 0 });
@@ -331,9 +662,10 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
       results.generateDrafts = latest.targets;
     }
 
+    assertRunNotCancelled(options);
     if (steps.includes("preflight-publish")) {
-      const latest = loadJob(job.id) || job;
       setJobStep(job.id, "preflighting-targets", "running", { percent: 0 });
+      const latest = loadJob(job.id) || job;
       const preflightResults: Record<string, unknown> = {};
       for (const target of latest.targets) {
         const previousStatus = target.status;
@@ -358,11 +690,15 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         message: "Publish preflight completed",
         data: { results: preflightResults },
       });
+      if (!steps.includes("publish") && loadSettings().publishing.scheduleMode === "scheduled") {
+        schedulePublishRun(job.id);
+      }
     }
 
+    assertRunNotCancelled(options);
     if (steps.includes("publish")) {
-      const latest = loadJob(job.id) || job;
       setJobStep(job.id, "publishing-targets", "running", { percent: 0 });
+      const latest = loadJob(job.id) || job;
       const publishResults: Record<string, unknown> = {};
       for (const target of latest.targets) {
         if (target.status === "published" && !options.force) {
@@ -380,13 +716,21 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         saveJob(latest);
       }
       results.publish = publishResults;
+      const publishedJob = loadJob(job.id);
+      if (publishedJob?.source.metadata?.scheduledPublishAt) {
+        const { scheduledPublishAt: _scheduledPublishAt, ...metadata } = publishedJob.source.metadata;
+        publishedJob.source.metadata = metadata;
+        saveJob(publishedJob);
+      }
       setJobStep(job.id, "publishing-targets", "completed", { percent: 100 });
       markCompletedIfAllTargetsPublished(job.id);
     }
   } catch (err) {
     currentRender = null;
     const message = err instanceof Error ? err.message : String(err);
-    failCurrentRunningStep(job.id, message);
+    if (!failCurrentRunningStep(job.id, message)) {
+      setJobStep(job.id, "failed", "failed", { error: message });
+    }
     throw err;
   }
 
@@ -426,25 +770,36 @@ async function processJobRunQueue(): Promise<void> {
       formatId: run.formatId,
       signal: run.abortController.signal,
     });
-    run.status = cancelledJobRunIds.has(run.id) ? "cancelled" : "completed";
+    run.status = pausedJobRunIds.has(run.id) ? "paused" : cancelledJobRunIds.has(run.id) ? "cancelled" : "completed";
     appendJobEvent({
       jobId: run.jobId,
       level: run.status === "completed" ? "info" : "warn",
-      message: run.status === "completed" ? "Background job run completed" : "Background job run cancelled",
+      message:
+        run.status === "completed"
+          ? "Background job run completed"
+          : run.status === "paused"
+            ? "Background job run paused"
+            : "Background job run cancelled",
       data: { runId: run.id, steps: run.steps },
     });
   } catch (err) {
-    run.status = cancelledJobRunIds.has(run.id) ? "cancelled" : "failed";
+    run.status = pausedJobRunIds.has(run.id) ? "paused" : cancelledJobRunIds.has(run.id) ? "cancelled" : "failed";
     run.error = err instanceof Error ? err.message : String(err);
     appendJobEvent({
       jobId: run.jobId,
       level: run.status === "failed" ? "error" : "warn",
-      message: run.status === "failed" ? "Background job run failed" : "Background job run cancelled",
+      message:
+        run.status === "failed"
+          ? "Background job run failed"
+          : run.status === "paused"
+            ? "Background job run paused"
+            : "Background job run cancelled",
       data: { runId: run.id, error: run.error },
     });
   } finally {
     run.finishedAt = Date.now();
     cancelledJobRunIds.delete(run.id);
+    pausedJobRunIds.delete(run.id);
     jobRunHistory.push(run);
     activeJobRun = null;
     void processJobRunQueue();
@@ -456,7 +811,9 @@ function enqueueJobRun(
   options: { steps?: string[]; force?: boolean; formatId?: string } = {}
 ): QueuedJobRun {
   const existing =
-    activeJobRun?.jobId === jobId
+    activeJobRun?.jobId === jobId &&
+    !cancelledJobRunIds.has(activeJobRun.id) &&
+    !pausedJobRunIds.has(activeJobRun.id)
       ? activeJobRun
       : jobRunQueue.find((run) => run.jobId === jobId && run.status === "queued");
   if (existing) return existing;
@@ -638,7 +995,8 @@ app.post("/api/jobs", async (req, res) => {
   try {
     const body = req.body as CreateJobRequest;
     const result = await createJobFromRequest(body);
-    res.json({ success: true, ...result });
+    const run = enqueueJobRun(result.job.id);
+    res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
   } catch (err) {
     const status = err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -654,7 +1012,8 @@ app.post("/api/workflows/youtube", async (req, res) => {
       requirement: req.body?.requirement,
     };
     const result = await createJobFromRequest(body);
-    res.json({ success: true, ...result });
+    const run = enqueueJobRun(result.job.id);
+    res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
   } catch (err) {
     const status = err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -702,6 +1061,71 @@ app.get("/api/jobs/:jobId/artifact", (req, res) => {
   res.type(path.extname(resolvedPath) || "text/plain").sendFile(resolvedPath);
 });
 
+app.post("/api/jobs/:jobId/prepare-preview", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  try {
+    const dirInfo = buildJobDirInfo(job);
+    preparePublicDir(dirInfo);
+    const studioProps = buildStudioProps(job, dirInfo);
+    const port = remotionStudioPort();
+    res.json({
+      success: true,
+      composition: "VideoComments",
+      publicDir: path.join(process.cwd(), "public"),
+      studioUrl: `http://localhost:${port}`,
+      studioProps,
+      studioCommand: `npm run dev -- --port ${port} --props '${JSON.stringify(studioProps)}'`,
+      files: {
+        video: dirInfo.videoFile,
+        comments: dirInfo.commentFile,
+        subtitles: dirInfo.subtitleFiles,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/jobs/:jobId/open-preview", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+
+  try {
+    const dirInfo = buildJobDirInfo(job);
+    preparePublicDir(dirInfo);
+    const studioProps = buildStudioProps(job, dirInfo);
+    const studio = startRemotionStudioPreview(job.id, studioProps);
+    appendJobEvent({
+      jobId: job.id,
+      level: "info",
+      message: "Remotion Studio preview opened",
+      data: { studioUrl: studio.studioUrl, studioProps },
+    });
+    res.json({
+      success: true,
+      composition: "VideoComments",
+      publicDir: path.join(process.cwd(), "public"),
+      studioProps,
+      ...studio,
+      files: {
+        video: dirInfo.videoFile,
+        comments: dirInfo.commentFile,
+        subtitles: dirInfo.subtitleFiles,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.post("/api/jobs/:jobId/start", (req, res) => {
   const job = loadJob(req.params.jobId);
   if (!job) {
@@ -726,7 +1150,34 @@ app.post("/api/jobs/:jobId/retry", (req, res) => {
   }
 
   const current = job.workflow.currentStep;
-  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(current);
+  const status = job.workflow.steps[current]?.status;
+  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(current, status);
+  const run = enqueueJobRun(job.id, {
+    steps,
+    force: Boolean(req.body?.force),
+    formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
+  });
+  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run, queue: snapshotQueue() });
+});
+
+app.post("/api/jobs/:jobId/pause", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  const run = pauseJobRunsForJob(job.id, "Job paused by user");
+  res.json({ success: true, run, job: loadJob(job.id), queue: snapshotQueue() });
+});
+
+app.post("/api/jobs/:jobId/resume", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  const status = job.workflow.steps[job.workflow.currentStep]?.status;
+  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(job.workflow.currentStep, status);
   const run = enqueueJobRun(job.id, {
     steps,
     force: Boolean(req.body?.force),
@@ -758,7 +1209,9 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => {
     activeJobRun.abortController?.abort();
     if (currentRender?.taskId === jobId) {
       currentRender.abortController?.abort();
+      terminateRenderProcesses();
     }
+    setJobStep(jobId, "cancelled", "completed", { percent: 100 });
     appendJobEvent({
       jobId,
       level: "warn",
@@ -770,6 +1223,17 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => {
   }
 
   res.status(404).json({ error: "No queued or running job run found" });
+});
+
+app.delete("/api/jobs/:jobId", (req, res) => {
+  const jobId = req.params.jobId;
+  pauseJobRunsForJob(jobId, "Job deleted by user");
+  const deleted = deleteJob(jobId);
+  if (!deleted) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  res.json({ success: true, queue: snapshotQueue() });
 });
 
 app.post("/api/jobs/:jobId/download", async (req, res) => {
@@ -948,7 +1412,7 @@ app.post("/api/jobs/:jobId/run", async (req, res) => {
 
     const steps: string[] = Array.isArray(req.body?.steps)
       ? req.body.steps
-      : ["download", "normalize", "render"];
+      : defaultRunSteps();
     const results = await executeJobRun(job.id, {
       steps,
       force: Boolean(req.body?.force),
@@ -1087,6 +1551,7 @@ app.post("/api/jobs/:jobId/publish", async (req, res) => {
     }
     let job = initialJob;
     setJobStep(job.id, "publishing-targets", "running", { percent: 0 });
+    job = loadJob(job.id) || job;
     const platforms = Array.isArray(req.body?.platforms)
       ? req.body.platforms.map(String)
       : job.targets.map((target) => target.platform);

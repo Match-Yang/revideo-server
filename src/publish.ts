@@ -146,6 +146,77 @@ async function uploadFile(page: Page, filePath: string) {
   }
 }
 
+async function queryBilibiliArchive(page: Page, title: string): Promise<Record<string, unknown>> {
+  try {
+    const pageBvid = await page.evaluate(() => {
+      const haystack = [
+        window.location.href,
+        ...Array.from(document.querySelectorAll("a[href]")).map((a) => (a as HTMLAnchorElement).href),
+        document.body?.innerText || "",
+      ].join("\n");
+      return haystack.match(/BV[0-9A-Za-z]+/)?.[0] || "";
+    });
+    const keywords = Array.from(
+      new Set([
+        pageBvid,
+        title,
+        title.replace(/#[^\s#]+/g, "").replace(/\s+/g, " ").trim(),
+        title.split(/[（(]|#/)[0].trim(),
+      ].filter(Boolean))
+    );
+    let data: unknown = null;
+    let rows: Array<any> = [];
+    for (let attempt = 0; attempt < 6 && rows.length === 0; attempt += 1) {
+      for (const keyword of keywords) {
+        data = await page.evaluate(async (kw: string) => {
+          const resp = await fetch(
+            `/x2/creative/web/archives/sp?pn=1&ps=10&keyword=${encodeURIComponent(kw)}`,
+            { credentials: "include" }
+          );
+          return resp.json();
+        }, keyword);
+        rows = ((data as any)?.data?.arc_audits || []) as Array<any>;
+        if (rows.length > 0) break;
+      }
+      if (rows.length === 0) await sleep(3000);
+    }
+    const exact = rows.find((row) => row?.Archive?.title === title) || rows[0];
+    const archive = exact?.Archive;
+    if (!archive) {
+      return pageBvid
+        ? { bvid: pageBvid, url: `https://www.bilibili.com/video/${pageBvid}`, raw: data as Record<string, unknown> }
+        : { raw: data as Record<string, unknown> };
+    }
+    const bvid = typeof archive.bvid === "string" && archive.bvid.startsWith("BV") ? archive.bvid : pageBvid;
+    return {
+      aid: archive.aid,
+      bvid,
+      url: bvid ? `https://www.bilibili.com/video/${bvid}` : undefined,
+      title: archive.title,
+      duration: archive.duration,
+      state: archive.state,
+      desc: archive.desc,
+      raw: archive,
+    };
+  } catch (err) {
+    return {
+      resultLookupError: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function getCurrentBilibiliCategory(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const fields = Array.from(document.querySelectorAll(".form-item, .form-group, .upload-form-item, [class*='form-item']"));
+    const categoryField = fields.find((field) => field.textContent?.includes("分区"));
+    const candidate =
+      categoryField?.querySelector(".selector-container, .select-container, [class*='select-controller'], [class*='select-container']") ||
+      categoryField;
+    if (!(candidate instanceof HTMLElement) || candidate.offsetHeight <= 0) return "";
+    return (candidate.textContent || "").replace(/\s+/g, " ").trim().replace(/^分区\s*/, "").trim();
+  });
+}
+
 // ============================================================
 // Bilibili
 // ============================================================
@@ -154,7 +225,7 @@ async function publishBilibili(
   options: PublishOptions,
   cdpEndpoint: string | undefined,
   onProgress: (p: PublishProgress) => void
-) {
+): Promise<Record<string, unknown>> {
   const { videoPath, title, description, tags = [] } = options;
 
   onProgress({ stage: "connecting", percent: 0, message: "正在连接B站..." });
@@ -225,8 +296,8 @@ async function publishBilibili(
     );
     if (descEditor) {
       await page.evaluate(
-        (el: HTMLElement, text: string) => {
-          el.focus();
+        (el: Element, text: string) => {
+          (el as HTMLElement).focus();
           document.execCommand("selectAll", false, undefined);
           document.execCommand("insertText", false, text);
         },
@@ -264,47 +335,58 @@ async function publishBilibili(
     if (options.category) {
       onProgress({ stage: "filling", percent: 52, message: `正在设置分区: ${options.category}...` });
       try {
-        const clickedContainer = await page.evaluate(() => {
-          const labels = Array.from(document.querySelectorAll("span, div, label"));
-          const label = labels.find((el) => el.textContent?.trim() === "分区");
-          const field =
-            label?.closest(".form-item, .form-group, .upload-form-item, [class*='form']") ||
-            label?.parentElement?.parentElement ||
-            null;
-          const container =
-            field?.querySelector(".select-container, [class*='select-container'], [class*='select-box']") ||
-            null;
-          if (container instanceof HTMLElement) {
-            container.click();
-            return true;
-          }
-          const visibleSelects = Array.from(document.querySelectorAll(".select-container, [class*='select-container']"))
-            .filter((item): item is HTMLElement => item instanceof HTMLElement && item.offsetHeight > 0);
-          const candidate =
-            visibleSelects.find((item) => item.textContent?.includes("vlog")) ||
-            visibleSelects[visibleSelects.length - 1];
-          candidate?.click();
-          return Boolean(candidate);
-        });
-        if (clickedContainer) {
-          await sleep(1000);
-          const clicked = await page.evaluate((targetCategory: string) => {
-            const items = document.querySelectorAll('.drop-list-v2-item, [class*="drop-list"] [title], [role="option"]');
-            for (const item of items) {
-              const title = item.getAttribute('title') || item.textContent?.trim();
-              if (title === targetCategory || title?.includes(targetCategory)) {
-                (item as HTMLElement).click();
-                return true;
-              }
-            }
-            return false;
-          }, options.category);
-          await sleep(1000);
-          if (!clicked) {
-            console.log(`[Category] "${options.category}" not found in dropdown, keeping default`);
-          }
+        let currentCategory = await getCurrentBilibiliCategory(page);
+        if (currentCategory.includes(options.category)) {
+          console.log(`[Category] Current category confirmed: ${currentCategory}`);
         } else {
-          console.log("[Category] Category dropdown not found, keeping default");
+          const clickedContainer = await page.evaluate(() => {
+            const labels = Array.from(document.querySelectorAll("span, div, label"));
+            const label = labels.find((el) => el.textContent?.trim() === "分区");
+            const field =
+              label?.closest(".form-item, .form-group, .upload-form-item, [class*='form']") ||
+              label?.parentElement?.parentElement ||
+              null;
+            const container =
+              field?.querySelector(".select-container, [class*='select-container'], [class*='select-box']") ||
+              null;
+            if (container instanceof HTMLElement) {
+              container.click();
+              return true;
+            }
+            const visibleSelects = Array.from(document.querySelectorAll(".select-container, [class*='select-container'], [class*='select']"))
+              .filter((item): item is HTMLElement => item instanceof HTMLElement && item.offsetHeight > 0);
+            const candidate =
+              visibleSelects.find((item) => item.textContent?.includes("分区")) ||
+              visibleSelects.find((item) => item.textContent?.includes("请选择")) ||
+              visibleSelects.find((item) => item.textContent?.includes("vlog")) ||
+              visibleSelects[visibleSelects.length - 1];
+            candidate?.click();
+            return Boolean(candidate);
+          });
+          if (clickedContainer) {
+            await sleep(1000);
+            const clicked = await page.evaluate((targetCategory: string) => {
+              const items = document.querySelectorAll('.drop-list-v2-item, .bcc-option, [class*="option"], [class*="drop-list"] [title], [role="option"]');
+              for (const item of items) {
+                const title = item.getAttribute('title') || item.textContent?.trim();
+                if (title === targetCategory || title?.includes(targetCategory)) {
+                  (item as HTMLElement).click();
+                  return true;
+                }
+              }
+              return false;
+            }, options.category);
+            await sleep(1000);
+            currentCategory = await getCurrentBilibiliCategory(page);
+            if (currentCategory.includes(options.category)) {
+              console.log(`[Category] Category confirmed: ${currentCategory}`);
+            } else if (!clicked) {
+              console.log(`[Category] "${options.category}" not found in dropdown, current=${currentCategory || "unknown"}, keeping default`);
+            }
+          } else {
+            currentCategory = await getCurrentBilibiliCategory(page);
+            console.log(`[Category] Category dropdown not found, current=${currentCategory || "unknown"}, keeping default`);
+          }
         }
       } catch (e) {
         console.error('[Category] Failed to set category:', e);
@@ -449,7 +531,6 @@ async function publishBilibili(
     // For large videos, B站 shows "等待视频上传完后会自动提交，请勿关闭当前页面"
     // after clicking submit — we must wait until upload finishes and "稿件投递成功" appears.
     onProgress({ stage: "submitting", percent: 75, message: "等待投稿确认..." });
-    let submitted = false;
     const SUBMIT_POLL_INTERVAL = 5000;
     const submitStart = Date.now();
 
@@ -467,7 +548,6 @@ async function publishBilibili(
 
       if (state === "success") {
         console.log(`[Submit] 稿件投递成功 after ${elapsed}s`);
-        submitted = true;
         break;
       }
 
@@ -485,8 +565,10 @@ async function publishBilibili(
       window.onbeforeunload = null;
     });
 
+    const result = await queryBilibiliArchive(page, title);
     await sleep(2000);
     onProgress({ stage: "done-bilibili", percent: 50, message: "✅ B站投稿成功！" });
+    return result;
   } catch (e) {
     // Disable beforeunload before disconnect to avoid dialog
     try { await page?.evaluate(() => { window.onbeforeunload = null; }); } catch (e2) {}
@@ -555,8 +637,8 @@ async function publishDouyin(
           const setter = Object.getOwnPropertyDescriptor(
             HTMLInputElement.prototype,
             "value"
-          )!.set;
-          setter.call(el, val);
+          )?.set;
+          setter?.call(el, val);
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
         },
@@ -570,9 +652,9 @@ async function publishDouyin(
     const descEditor = await page.$(".editor-kit-container");
     if (descEditor) {
       await page.evaluate(
-        (el: HTMLElement, text: string) => {
-          el.focus();
-          document.execCommand("selectAll", false, null);
+        (el: Element, text: string) => {
+          (el as HTMLElement).focus();
+          document.execCommand("selectAll", false, undefined);
           document.execCommand("insertText", false, text);
         },
         descEditor,
@@ -662,7 +744,7 @@ export async function publish(
     throw new Error("请至少提供 bilibili 或 douyin 的发布配置");
   }
 
-  const results: Record<string, { success: boolean; error?: string }> = {};
+  const results: Record<string, { success: boolean; error?: string; [key: string]: unknown }> = {};
 
   for (let i = 0; i < platforms.length; i++) {
     const platform = platforms[i];
@@ -677,13 +759,13 @@ export async function publish(
           tags: req.bilibili?.tags,
           category: req.bilibili?.category,
         };
-        await publishBilibili(opts, cdpEndpoint, (p) =>
+        const result = await publishBilibili(opts, cdpEndpoint, (p) =>
           onProgress({
             ...p,
             percent: basePercent + (p.percent / platforms.length),
           })
         );
-        results.bilibili = { success: true };
+        results.bilibili = { success: true, ...result };
       } else if (platform === "douyin") {
         const opts: PublishOptions = {
           videoPath,

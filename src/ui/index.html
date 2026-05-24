@@ -399,6 +399,7 @@
               <h3 class="card-title">视频发布设置</h3>
               <div class="settings-grid" style="margin-top: 14px;">
                 <label><span class="field-label">发布时间逻辑</span><select name="publishing.scheduleMode" class="select"><option value="immediate">立即发布</option><option value="scheduled">定时发布</option></select></label>
+                <label><span class="field-label">定时延迟分钟</span><input name="publishing.scheduledDelayMinutes" type="number" min="0" max="10080" class="input"></label>
                 <label><span class="field-label">发布失败重试次数</span><input name="publishing.retryCount" type="number" min="0" max="10" class="input"></label>
                 <div><span class="field-label">默认发布平台</span><div id="defaultPlatformSettings" class="flex flex-wrap gap-2"></div></div>
               </div>

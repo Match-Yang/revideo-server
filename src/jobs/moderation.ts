@@ -152,7 +152,6 @@ const EN_WORD_BOUNDARY = [
   "cock",
   "pussy",
   "pedo",
-  "scam",
   "gang",
   "meth",
 ];
@@ -229,7 +228,6 @@ const EN_SUBSTRING = [
   "fentanyl",
   "drug dealer",
   "casino",
-  "fraud",
 ];
 
 const EN_EXCLUDE_PATTERNS = [
@@ -313,6 +311,30 @@ function splitBatch<T>(items: T[]): [T[], T[]] {
   return [items.slice(0, middle), items.slice(middle)];
 }
 
+function hasChinese(text: string): boolean {
+  return /[\u3400-\u9fff]/.test(text);
+}
+
+function requiresChineseOutput(targetLanguage: string): boolean {
+  return /^(zh|cmn|yue)|chinese|中文/i.test(targetLanguage);
+}
+
+function isNonSemanticText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return true;
+  if (/^https?:\/\/\S+$/i.test(normalized)) return true;
+  if (/^#?[\p{Letter}\p{Number}_-]{1,8}$/u.test(normalized) && !/\s/.test(normalized)) return true;
+  if (/[A-Za-z\u3400-\u9fff]/.test(normalized)) return false;
+  return /^[\p{Emoji_Presentation}\p{Extended_Pictographic}\p{Number}\p{Punctuation}\p{Symbol}\p{Separator}\s]+$/u.test(normalized);
+}
+
+function targetLanguageInstruction(targetLanguage: string): string {
+  if (requiresChineseOutput(targetLanguage)) {
+    return "Simplified Chinese (简体中文, zh-CN). The output translation for every safe non-Chinese input MUST contain Chinese characters.";
+  }
+  return targetLanguage;
+}
+
 function dropBatch(inputs: SafetyReviewInput[], reason: string): SafetyReviewOutput[] {
   return inputs.map((source) => ({
     id: source.id,
@@ -337,19 +359,31 @@ function parseSafetyReviewedTranslation(raw: string): SafetyReviewedTranslation 
 }
 
 export function safetyReviewTranslationPrompt(kind: "comment" | "subtitle", targetLanguage: string): string {
+  const targetInstruction = targetLanguageInstruction(targetLanguage);
   return `You are a strict safety reviewer and translator for a video reposting pipeline.
 
 Task:
-In the same pass, review the input ${kind} for publication safety. If it is safe and not Chinese, translate it into ${targetLanguage}. If it is safe Chinese, return the original text unchanged.
+In the same pass, review the input ${kind} for publication safety. If it is safe and not Chinese, translate it into ${targetInstruction}. If it is safe Chinese, return the original text unchanged.
 
-Publication safety policy, intentionally over-strict:
-- Drop any political statement, slogan, meme, joke, sarcasm, criticism, accusation, praise, debate, or historical reference involving China, Taiwan, Hong Kong, Macau, Tibet, Xinjiang, governments, parties, leaders, elections, protests, sanctions, war, military, ideology, religion, or separatism.
-- Drop any mention that could become sensitive after translation, including pro/anti-China arguments, China-related geopolitics, sovereignty disputes, regime or party commentary, revolution, dictatorship, propaganda, protests, genocide, concentration camps, censorship, VPN/firewall, cults, or banned organizations.
+Language rule:
+- Treat text as Chinese only when it contains CJK Chinese characters matching /[\\u3400-\\u9fff]/.
+- English, romanized Chinese, and other natural-language non-CJK text are non-Chinese and MUST be translated into ${targetInstruction}.
+- Emoji-only, number-only, punctuation-only, symbol-only, URL-only, hashtag-only, model-name-only, or very short non-semantic reactions such as "😂", "123", "!!!", "#1", "H9", "👍👍" may be kept exactly unchanged because there is no meaningful language to translate.
+- For every safe non-Chinese input, the "translation" field MUST be Chinese text. Returning the original English/non-Chinese text is invalid.
+- For already-Chinese input, including Traditional Chinese, return the exact original text unchanged. Do not convert Traditional Chinese to Simplified Chinese.
+
+Publication safety policy:
+- Keep ordinary product, vehicle, technology, price, design, reliability, service, brand, market, ownership, or consumer-opinion comments, even when they mention China, Chinese cars, Chinese brands, Chinese products, or comparisons with Tesla, Europe, Japan, Korea, Canada, or the US.
+- Keep ordinary positive or negative product opinions such as "Chinese SUVs are amazing", "they look nice but may not be reliable", "Chinese cars are cheaper", "China's SUV evolution is insane", or "I would not buy this brand", unless they also contain a separate high-risk issue below.
+- Drop political, geopolitical, ideological, sovereignty, military, sanctions, war, election, protest, government, party, leader, ethnic/religious conflict, separatism, or historical atrocity content involving any country or region, including China, Taiwan, Hong Kong, Macau, Tibet, Xinjiang, Russia, the US, etc.
+- Drop nationalist incitement, dehumanizing attacks, hate, or insults targeting a nationality/ethnicity/region/people group. Product or brand insults alone are not hate speech.
+- Drop content about censorship, VPN/firewall, banned organizations, cults, protests, genocide, concentration camps, political prisoners, dictatorship/regime claims, or propaganda accusations.
 - Drop illegal or platform-risk content: pornography, sexual solicitation, minors, gambling, drugs, fraud, fake documents, loan sharks, trafficking, doxxing, weapons, organized crime, violent crime, self-harm, hate, discrimination, scams, private data trading, or instructions for wrongdoing.
-- Drop borderline cases. False positives are acceptable; false negatives are not.
+- Drop borderline political/legal/safety cases. Do not treat ordinary product praise or criticism as borderline just because it mentions China.
 - Do not sanitize unsafe content. Do not summarize unsafe content. Do not translate unsafe content. Just drop it.
 - For safe non-Chinese comments, use lively natural Chinese while preserving meaning.
 - For safe non-Chinese subtitles, use concise natural Chinese while preserving meaning and timing readability.
+- Subtitle items may be short sentence fragments. Translate only the fragment. Do not add notes, explanations, completions, labels, or text such as "original sentence incomplete".
 - If source text is already Chinese, including Traditional Chinese, do not convert, rewrite, polish, or translate it. Return the exact original text unchanged.
 - For translated non-Chinese text, output only the Chinese translation. Never include the original source text, bilingual pairs, labels, explanations, or extra lines.
 
@@ -364,10 +398,11 @@ export function batchSafetyReviewTranslationPrompt(
   targetLanguage: string,
   context?: string
 ): string {
+  const targetInstruction = targetLanguageInstruction(targetLanguage);
   return `You are a strict safety reviewer and translator for a video reposting pipeline.
 
 Task:
-Review a JSON array of ${kind}s for publication safety. Translate only non-Chinese safe items into ${targetLanguage}. For safe Chinese items, return the exact original text unchanged.
+Review a JSON array of ${kind}s for publication safety. Translate only non-Chinese safe items into ${targetInstruction}. For safe Chinese items, return the exact original text unchanged.
 
 Source context:
 ${context?.trim() || "No source context provided."}
@@ -381,18 +416,29 @@ Output format:
 Return strict JSON only: {"items":[...]}.
 The items array must have the exact same length and exact same ids, in the same order.
 For each item:
-{"id":"stable-id","action":"keep","translation":"Chinese translation or unchanged original Chinese text"}
+{"id":"stable-id","action":"keep","translation":"Chinese translation for non-Chinese input, or unchanged original Chinese text"}
 or
 {"id":"stable-id","action":"drop","reason":"short reason"}
 
-Hard policy, intentionally over-strict:
-- Drop any political statement, slogan, meme, joke, sarcasm, criticism, accusation, praise, debate, or historical reference involving China, Taiwan, Hong Kong, Macau, Tibet, Xinjiang, governments, parties, leaders, elections, protests, sanctions, war, military, ideology, religion, or separatism.
-- Drop any mention that could become sensitive after translation, including pro/anti-China arguments, China-related geopolitics, sovereignty disputes, regime or party commentary, revolution, dictatorship, propaganda, protests, genocide, concentration camps, censorship, VPN/firewall, cults, or banned organizations.
+Language rule:
+- Treat text as Chinese only when it contains CJK Chinese characters matching /[\\u3400-\\u9fff]/.
+- English, romanized Chinese, and other natural-language non-CJK text are non-Chinese and MUST be translated into ${targetInstruction}.
+- Emoji-only, number-only, punctuation-only, symbol-only, URL-only, hashtag-only, model-name-only, or very short non-semantic reactions such as "😂", "123", "!!!", "#1", "H9", "👍👍" may be kept exactly unchanged because there is no meaningful language to translate.
+- For every safe non-Chinese input, the "translation" field MUST contain Chinese characters. Returning the original English/non-Chinese text is invalid.
+- For already-Chinese input, including Traditional Chinese, return the exact original text unchanged. Do not convert Traditional Chinese to Simplified Chinese.
+
+Hard policy:
+- Keep ordinary product, vehicle, technology, price, design, reliability, service, brand, market, ownership, or consumer-opinion comments, even when they mention China, Chinese cars, Chinese brands, Chinese products, or comparisons with Tesla, Europe, Japan, Korea, Canada, or the US.
+- Keep ordinary positive or negative product opinions such as "Chinese SUVs are amazing", "they look nice but may not be reliable", "Chinese cars are cheaper", "China's SUV evolution is insane", or "I would not buy this brand", unless they also contain a separate high-risk issue below.
+- Drop political, geopolitical, ideological, sovereignty, military, sanctions, war, election, protest, government, party, leader, ethnic/religious conflict, separatism, or historical atrocity content involving any country or region, including China, Taiwan, Hong Kong, Macau, Tibet, Xinjiang, Russia, the US, etc.
+- Drop nationalist incitement, dehumanizing attacks, hate, or insults targeting a nationality/ethnicity/region/people group. Product or brand insults alone are not hate speech.
+- Drop content about censorship, VPN/firewall, banned organizations, cults, protests, genocide, concentration camps, political prisoners, dictatorship/regime claims, or propaganda accusations.
 - Drop illegal or platform-risk content: pornography, sexual solicitation, minors, gambling, drugs, fraud, fake documents, loan sharks, trafficking, doxxing, weapons, organized crime, violent crime, self-harm, hate, discrimination, scams, private data trading, or instructions for wrongdoing.
-- Drop borderline cases. False positives are acceptable; false negatives are not.
+- Drop borderline political/legal/safety cases. Do not treat ordinary product praise or criticism as borderline just because it mentions China.
 - Do not sanitize unsafe content. Do not summarize unsafe content. Do not translate unsafe content. Just drop it.
 - For safe non-Chinese comments, use lively natural Chinese while preserving meaning.
 - For safe non-Chinese subtitles, use concise natural Chinese while preserving meaning and timing readability.
+- Subtitle items may be short sentence fragments. Translate only the fragment. Do not add notes, explanations, completions, labels, or text such as "original sentence incomplete".
 - If source text is already Chinese, including Traditional Chinese, do not convert, rewrite, polish, or translate it. Return the exact original text unchanged.
 - For translated non-Chinese text, output only the Chinese translation. Never include the original source text, bilingual pairs, labels, explanations, or extra lines.
 
@@ -405,7 +451,11 @@ Critical integrity rules:
 - Output JSON only, no markdown, no explanation.`;
 }
 
-function parseSafetyReviewBatch(raw: string, inputs: SafetyReviewInput[]): SafetyReviewOutput[] {
+function parseSafetyReviewBatch(
+  raw: string,
+  inputs: SafetyReviewInput[],
+  targetLanguage: string
+): SafetyReviewOutput[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(extractJsonPayload(raw));
@@ -450,6 +500,17 @@ function parseSafetyReviewBatch(raw: string, inputs: SafetyReviewInput[]): Safet
       };
     }
     if (output.action === "keep" && typeof output.translation === "string" && output.translation.trim()) {
+      if (
+        requiresChineseOutput(targetLanguage) &&
+        !hasChinese(source.text) &&
+        !isNonSemanticText(source.text) &&
+        !hasChinese(output.translation)
+      ) {
+        throw new BatchRetryableTranslationError(
+          "missing-target-language",
+          `Translation batch item stayed non-Chinese at ${index}: ${source.id}`
+        );
+      }
       const translatedReason = findLocalSensitiveReason(output.translation);
       if (translatedReason) {
         return {
@@ -501,21 +562,36 @@ export async function translateBatchWithSafetyReview(
 ): Promise<SafetyReviewOutput[]> {
   if (inputs.length === 0) return [];
 
-  try {
-    const raw = await translateText({
-      text: JSON.stringify(inputs),
-      targetLanguage,
-      systemPrompt: batchSafetyReviewTranslationPrompt(kind, targetLanguage, context),
-    });
+  const maxBatchAttempts = Math.max(1, Number(process.env.TRANSLATE_BATCH_RETRY_LIMIT || 3));
+  let lastRetryableError: BatchRetryableTranslationError | undefined;
 
-    return parseSafetyReviewBatch(raw, inputs);
-  } catch (error) {
-    if (!(error instanceof BatchRetryableTranslationError)) throw error;
-    if (inputs.length === 1) return dropBatch(inputs, error.reason);
+  for (let attempt = 1; attempt <= maxBatchAttempts; attempt += 1) {
+    try {
+      const retryInstruction =
+        attempt > 1
+          ? `\n\nRetry attempt ${attempt}/${maxBatchAttempts}: the previous response failed validation. Re-check every kept non-Chinese item and make sure its translation is actual ${targetLanguageInstruction(
+              targetLanguage
+            )}. Do not return the source English/non-Chinese text as translation.`
+          : "";
+      const raw = await translateText({
+        text: JSON.stringify(inputs),
+        targetLanguage,
+        systemPrompt: batchSafetyReviewTranslationPrompt(kind, targetLanguage, context) + retryInstruction,
+      });
 
-    const [left, right] = splitBatch(inputs);
-    const leftResults = await translateBatchWithSafetyReview(left, targetLanguage, kind, context);
-    const rightResults = await translateBatchWithSafetyReview(right, targetLanguage, kind, context);
-    return [...leftResults, ...rightResults];
+      return parseSafetyReviewBatch(raw, inputs, targetLanguage);
+    } catch (error) {
+      if (!(error instanceof BatchRetryableTranslationError)) throw error;
+      lastRetryableError = error;
+      if (attempt < maxBatchAttempts) continue;
+    }
   }
+
+  const reason = lastRetryableError?.reason || "batch-validation-failed";
+  if (inputs.length === 1) return dropBatch(inputs, reason);
+
+  const [left, right] = splitBatch(inputs);
+  const leftResults = await translateBatchWithSafetyReview(left, targetLanguage, kind, context);
+  const rightResults = await translateBatchWithSafetyReview(right, targetLanguage, kind, context);
+  return [...leftResults, ...rightResults];
 }

@@ -11,6 +11,8 @@ import type {
 } from "../types";
 
 const YOUTUBE_ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/))([^&?\s/]+)/;
+const CHINESE_SUBTITLE_FALLBACKS = ["zh-Hans", "zh-Hant", "zh.*"];
+const ENGLISH_SUBTITLE_FALLBACKS = ["en.*", "en"];
 
 function execFileText(
   command: string,
@@ -31,6 +33,109 @@ function execFileText(
 
 export function extractYoutubeId(url: string): string | undefined {
   return url.match(YOUTUBE_ID_RE)?.[1];
+}
+
+function listSubtitleFiles(outputDir: string): string[] {
+  return walkFiles(path.join(outputDir, "subtitles")).filter((file) => /\.(vtt|srt)$/i.test(file));
+}
+
+function isChineseSubtitleLanguage(language: string): boolean {
+  return /^zh(?:[-_]|$)|chinese|中文/i.test(language);
+}
+
+function sortSubtitleLanguages(languages: string[]): string[] {
+  return Array.from(new Set(languages.filter(Boolean))).sort((a, b) => {
+    const rank = (language: string) => {
+      if (/^zh-Hans$/i.test(language)) return 0;
+      if (/^zh-Hant$/i.test(language)) return 1;
+      if (/^zh/i.test(language)) return 2;
+      if (/^en(?:[-_]|$)/i.test(language)) return 3;
+      return 4;
+    };
+    return rank(a) - rank(b) || a.localeCompare(b);
+  });
+}
+
+function subtitleLanguagesFromInfo(outputDir: string): string[] {
+  const infoPath = walkFiles(outputDir).find((file) => /\.info\.json$/i.test(file));
+  if (!infoPath) return [];
+  try {
+    const info = JSON.parse(fs.readFileSync(infoPath, "utf-8")) as {
+      subtitles?: Record<string, unknown>;
+      automatic_captions?: Record<string, unknown>;
+    };
+    return sortSubtitleLanguages([
+      ...Object.keys(info.subtitles || {}),
+      ...Object.keys(info.automatic_captions || {}),
+    ]);
+  } catch {
+    return [];
+  }
+}
+
+async function downloadSubtitleLanguages(
+  request: DownloadRequest,
+  languages: string[],
+  label: string
+): Promise<boolean> {
+  const before = new Set(listSubtitleFiles(request.outputDir));
+  const subtitleTemplate = path.join(request.outputDir, "subtitles", "%(id)s.%(ext)s");
+  const args = [
+    "--skip-download",
+    "--write-subs",
+    "--write-auto-subs",
+    "--sub-langs",
+    languages.join(","),
+    "--sub-format",
+    "vtt/srt/best",
+    "--convert-subs",
+    "vtt",
+    "--sleep-subtitles",
+    "2",
+    "--no-playlist",
+    "-o",
+    subtitleTemplate,
+    request.url,
+  ];
+
+  await execFileText(resolveCommand("yt-dlp"), args, 30 * 60 * 1000, request.signal);
+  const after = listSubtitleFiles(request.outputDir);
+  const hasNewFile = after.some((file) => !before.has(file));
+  if (!hasNewFile) {
+    console.warn(`[youtube] subtitle download produced no files for ${label}: ${languages.join(",")}`);
+  }
+  return hasNewFile;
+}
+
+async function tryDownloadSubtitles(request: DownloadRequest): Promise<void> {
+  const availableLanguages = subtitleLanguagesFromInfo(request.outputDir);
+  const chineseLanguages = availableLanguages.filter(isChineseSubtitleLanguage);
+  const nonChineseLanguages = availableLanguages.filter((language) => !isChineseSubtitleLanguage(language) && language !== "live_chat");
+  const englishLanguages = nonChineseLanguages.filter((language) => /^en(?:[-_]|$)|^en\./i.test(language));
+  const primaryLanguages = chineseLanguages.length ? chineseLanguages : CHINESE_SUBTITLE_FALLBACKS;
+  const fallbackLanguages = englishLanguages.length
+    ? englishLanguages
+    : nonChineseLanguages.length
+      ? nonChineseLanguages.slice(0, 3)
+      : ENGLISH_SUBTITLE_FALLBACKS;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      if (await downloadSubtitleLanguages(request, primaryLanguages, `Chinese attempt ${attempt}`)) return;
+    } catch (err) {
+      console.warn(
+        `[youtube] Chinese subtitle attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  try {
+    await downloadSubtitleLanguages(request, fallbackLanguages, "non-Chinese fallback");
+  } catch (err) {
+    console.warn(
+      `[youtube] subtitle fallback skipped: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 }
 
 function walkFiles(dir: string): string[] {
@@ -141,6 +246,7 @@ export const youtubeSourceAdapter: SourceAdapter = {
 
     args.push(request.url);
     await execFileText(resolveCommand("yt-dlp"), args, 3 * 60 * 60 * 1000, request.signal);
+    await tryDownloadSubtitles(request);
 
     const files = walkFiles(request.outputDir);
     const mediaPath = files.find((file) => /\.(mp4|mkv|webm|mov)$/i.test(file));

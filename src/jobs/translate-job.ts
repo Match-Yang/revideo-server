@@ -43,6 +43,28 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+async function mapConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await worker(items[index], index);
+      }
+    })
+  );
+
+  return results;
+}
+
 function commentId(comment: CommentLike, index: number): string {
   const raw = comment.id || comment.comment_id || `comment-${index}`;
   return String(raw);
@@ -55,6 +77,19 @@ function commentAuthorId(comment: CommentLike): string {
 
 function hasChinese(text: string): boolean {
   return /[\u3400-\u9fff]/.test(text);
+}
+
+function expectsChinese(targetLanguage: string): boolean {
+  return /^(zh|cmn|yue)|chinese|中文/i.test(targetLanguage);
+}
+
+function isNonSemanticText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return true;
+  if (/^https?:\/\/\S+$/i.test(normalized)) return true;
+  if (/^#?[\p{Letter}\p{Number}_-]{1,8}$/u.test(normalized) && !/\s/.test(normalized)) return true;
+  if (/[A-Za-z\u3400-\u9fff]/.test(normalized)) return false;
+  return /^[\p{Emoji_Presentation}\p{Extended_Pictographic}\p{Number}\p{Punctuation}\p{Symbol}\p{Separator}\s]+$/u.test(normalized);
 }
 
 function translatedCommentText(original: string, translation: string): string {
@@ -113,7 +148,7 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
   const configuredLimit = Number(process.env.TRANSLATE_COMMENT_LIMIT || 800);
   const targetCount = Number(job.options.targetCommentCount || configuredLimit);
   const limit = Math.max(1, Math.min(configuredLimit, targetCount));
-  const batchSize = Number(process.env.TRANSLATE_COMMENT_BATCH_SIZE || 100);
+  const batchSize = Number(process.env.TRANSLATE_COMMENT_BATCH_SIZE || 50);
   const selected = candidates.slice(0, limit);
   let droppedCount = 0;
 
@@ -127,8 +162,13 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
     return { id, text: comment.text || "" };
   });
 
-  for (const batch of chunk(inputs, batchSize)) {
-    const results = await translateBatchWithSafetyReview(batch, targetLanguage, "comment", context);
+  const batches = chunk(inputs, batchSize);
+  const concurrency = Math.min(10, Math.max(1, Number(process.env.TRANSLATE_COMMENT_CONCURRENCY || 10)));
+  const batchResults = await mapConcurrent(batches, concurrency, (batch) =>
+    translateBatchWithSafetyReview(batch, targetLanguage, "comment", context)
+  );
+
+  for (const results of batchResults) {
     for (const result of results) {
       const comment = byId.get(result.id);
       if (!comment) throw new Error(`Translated comment id not found: ${result.id}`);
@@ -150,6 +190,24 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
       } else {
         const originalText = String(comment.text || "");
         const translatedText = translatedCommentText(originalText, result.translation || "");
+        if (expectsChinese(targetLanguage) && !hasChinese(originalText) && !hasChinese(translatedText)) {
+          if (isNonSemanticText(originalText)) {
+            comment.text = originalText.trim();
+            continue;
+          }
+          comment.text = "__SENSITIVE__";
+          sensitiveCommentIds.add(commentId(comment, -1));
+          dropped.push({
+            id: result.id,
+            kind: "comment",
+            reason: "missing-target-language",
+            text: originalText,
+            author: typeof comment.author === "string" ? comment.author : undefined,
+            authorId: commentAuthorId(comment) || undefined,
+          });
+          droppedCount++;
+          continue;
+        }
         const postScanReason = findLocalSensitiveReason(
           [translatedText, typeof comment.author === "string" ? comment.author : "", commentAuthorId(comment)].join("\n")
         );
@@ -193,36 +251,102 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
 
 interface SubtitleCue {
   id: string;
-  blockIndex: number;
-  textStart: number;
-  textEnd: number;
+  start: number;
+  end: number;
   text: string;
 }
 
-function parseSubtitleBlocks(content: string): { blocks: string[][]; cues: SubtitleCue[] } {
+function parseSubtitleTimestamp(value: string): number {
+  const match = value.trim().match(/^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$/);
+  if (!match) return 0;
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 1000;
+}
+
+function formatSubtitleTimestamp(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = Math.floor(safe % 60);
+  const millis = Math.round((safe - Math.floor(safe)) * 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+function cleanSubtitleCueText(value: string): string {
+  return value
+    .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
+    .replace(/<\/?c[^>]*>/g, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function overlappingPrefixWordCount(previous: string, current: string): number {
+  const previousWords = previous.split(/\s+/).filter(Boolean);
+  const currentWords = current.split(/\s+/).filter(Boolean);
+  const max = Math.min(previousWords.length, currentWords.length);
+  for (let size = max; size > 0; size -= 1) {
+    const prevTail = previousWords.slice(previousWords.length - size).join(" ").toLowerCase();
+    const currentHead = currentWords.slice(0, size).join(" ").toLowerCase();
+    if (prevTail === currentHead) return size;
+  }
+  return 0;
+}
+
+function reduceRollingSubtitleCues(cues: SubtitleCue[]): SubtitleCue[] {
+  const reduced: SubtitleCue[] = [];
+  let previousFullText = "";
+
+  for (const cue of cues) {
+    if (cue.end - cue.start < 0.12) continue;
+    const words = cue.text.split(/\s+/).filter(Boolean);
+    const overlap = previousFullText ? overlappingPrefixWordCount(previousFullText, cue.text) : 0;
+    const text = (overlap > 0 ? words.slice(overlap).join(" ") : cue.text).trim();
+    previousFullText = cue.text;
+    if (!text) continue;
+    if (reduced[reduced.length - 1]?.text === text) continue;
+    reduced.push({ ...cue, id: `cue-${reduced.length}`, text });
+  }
+
+  return reduced.length ? reduced : cues;
+}
+
+function parseSubtitleCues(content: string): SubtitleCue[] {
   const blocks = content
     .split(/\n\s*\n/g)
     .map((block) => block.split(/\r?\n/));
   const cues: SubtitleCue[] = [];
+  const hasInlineTiming = /<\d{2}:\d{2}:\d{2}\.\d{3}>/.test(content);
 
   blocks.forEach((block, blockIndex) => {
     const timingIndex = block.findIndex((line) => line.includes("-->"));
     if (timingIndex === -1) return;
+    const timing = block[timingIndex].match(
+      /(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})/
+    );
+    if (!timing) return;
     let textStart = timingIndex + 1;
     while (textStart < block.length && !block[textStart].trim()) textStart++;
     const textEnd = block.length;
-    const text = block.slice(textStart, textEnd).join("\n").trim();
+    const text = cleanSubtitleCueText(block.slice(textStart, textEnd).join("\n"));
     if (!text) return;
     cues.push({
       id: `cue-${blockIndex}`,
-      blockIndex,
-      textStart,
-      textEnd,
+      start: parseSubtitleTimestamp(timing[1]),
+      end: parseSubtitleTimestamp(timing[2]),
       text,
     });
   });
 
-  return { blocks, cues };
+  return hasInlineTiming ? reduceRollingSubtitleCues(cues) : cues;
+}
+
+function sanitizeTranslatedSubtitleText(value: string): string {
+  return cleanSubtitleCueText(value)
+    .replace(/\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}/g, "")
+    .replace(/\bWEBVTT\b/gi, "")
+    .replace(/^[（(]?\s*(注|说明|备注)[:：].*$/g, "")
+    .replace(/原句未完整.*$/g, "")
+    .trim();
 }
 
 async function translateSubtitleFile(
@@ -232,40 +356,63 @@ async function translateSubtitleFile(
   context: string
 ): Promise<{ inputCount: number; droppedCount: number; dropped: DroppedItemReport[] }> {
   const content = fs.readFileSync(sourcePath, "utf-8").replace(/\r\n/g, "\n");
-  const { blocks, cues } = parseSubtitleBlocks(content);
+  const cues = parseSubtitleCues(content);
   const batchSize = Number(process.env.TRANSLATE_SUBTITLE_BATCH_SIZE || 100);
   let droppedCount = 0;
   const dropped: DroppedItemReport[] = [];
+  const translatedById = new Map<string, string>();
 
   const inputs: SafetyReviewInput[] = cues.map((cue) => ({ id: cue.id, text: cue.text }));
   const cueById = new Map(cues.map((cue) => [cue.id, cue]));
 
-  for (const batch of chunk(inputs, batchSize)) {
-    const results = await translateBatchWithSafetyReview(batch, targetLanguage, "subtitle", context);
+  const batches = chunk(inputs, batchSize);
+  const concurrency = Math.min(10, Math.max(1, Number(process.env.TRANSLATE_SUBTITLE_CONCURRENCY || 10)));
+  const batchResults = await mapConcurrent(batches, concurrency, (batch) =>
+    translateBatchWithSafetyReview(batch, targetLanguage, "subtitle", context)
+  );
+
+  for (const results of batchResults) {
     for (const result of results) {
       const cue = cueById.get(result.id);
       if (!cue) throw new Error(`Translated subtitle cue id not found: ${result.id}`);
-      const block = blocks[cue.blockIndex];
-      const replacement = result.action === "drop" ? "" : hasChinese(cue.text) ? cue.text : result.translation || "";
-      if (result.action === "drop") {
+      const replacement =
+        result.action === "drop"
+          ? ""
+          : hasChinese(cue.text)
+            ? cue.text
+            : sanitizeTranslatedSubtitleText(result.translation || "");
+      const missingTargetLanguage =
+        result.action !== "drop" &&
+        expectsChinese(targetLanguage) &&
+        !hasChinese(cue.text) &&
+        !isNonSemanticText(cue.text) &&
+        !hasChinese(replacement);
+      if (result.action === "drop" || missingTargetLanguage) {
         droppedCount++;
         dropped.push({
           id: result.id,
           kind: "subtitle",
-          reason: result.reason || "model",
+          reason: missingTargetLanguage ? "missing-target-language" : result.reason || "model",
           text: cue.text,
         });
       }
-      block.splice(cue.textStart, cue.textEnd - cue.textStart, replacement);
+      translatedById.set(result.id, missingTargetLanguage ? "" : replacement);
     }
   }
 
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(targetPath, blocks.map((block) => block.join("\n")).join("\n\n"));
+  const blocks = cues
+    .map((cue) => {
+      const text = translatedById.get(cue.id) || "";
+      if (!text) return "";
+      return `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}\n${text}`;
+    })
+    .filter(Boolean);
+  fs.writeFileSync(targetPath, `WEBVTT\nKind: captions\nLanguage: ${targetLanguage}\n\n${blocks.join("\n\n")}\n`);
   return { inputCount: cues.length, droppedCount, dropped };
 }
 
-async function translateSubtitles(job: RevideoJob, targetLanguage: string) {
+export async function translateSubtitles(job: RevideoJob, targetLanguage: string) {
   const normalized = job.source.metadata?.normalizedAssets as
     | { subtitlePaths?: string[] }
     | undefined;

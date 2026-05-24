@@ -22,6 +22,7 @@ export interface RevideoSettings {
   publishing: {
     defaultPlatforms: TargetPlatform[];
     scheduleMode: "immediate" | "scheduled";
+    scheduledDelayMinutes: number;
     retryCount: number;
     platformConfigs: {
       bilibili: {
@@ -60,6 +61,7 @@ export const defaultSettings: RevideoSettings = {
   publishing: {
     defaultPlatforms: ["bilibili"],
     scheduleMode: "immediate",
+    scheduledDelayMinutes: 0,
     retryCount: 1,
     platformConfigs: {
       bilibili: {

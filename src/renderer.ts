@@ -26,13 +26,13 @@ function downloadWithProxy(url: string): Promise<Buffer> {
 
     connectReq.on("connect", (_res, socket) => {
       const req = https.get(
-        {
+        ({
           hostname: targetUrl.hostname,
           path: targetUrl.pathname + targetUrl.search,
           socket,
           agent: false,
           headers: { Host: targetUrl.hostname },
-        },
+        } as any),
         (res) => {
           if (res.statusCode === 301 || res.statusCode === 302) {
             const location = res.headers.location!;
@@ -277,7 +277,7 @@ export async function render(
     enableCaching: false,
     webpackOverride,
     signal,
-  });
+  } as any);
 
   // Select composition with inputProps (triggers calculateMetadata)
   const composition = await selectComposition({
@@ -285,7 +285,7 @@ export async function render(
     id: "VideoComments",
     inputProps,
     signal,
-  });
+  } as any);
 
   const totalRenderFrames = composition.durationInFrames;
 
@@ -328,7 +328,7 @@ export async function render(
     chromiumOptions: {
       args: [`--proxy-server=${PROXY}`],
     },
-  });
+  } as any);
 
   emit("extracting-cover", 96, "提取封面...");
 

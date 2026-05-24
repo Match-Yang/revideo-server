@@ -15,11 +15,7 @@ function pickSubtitle(subtitlePaths: string[]): string[] {
   return zh ? [zh] : subtitlePaths.slice(0, 1);
 }
 
-export async function renderJob(
-  job: RevideoJob,
-  onProgress?: (progress: RenderProgress) => void,
-  signal?: AbortSignal
-): Promise<JobRenderResult> {
+export function buildJobDirInfo(job: RevideoJob): DirInfo {
   const normalized = job.source.metadata?.normalizedAssets as
     | {
         mediaPath?: string;
@@ -39,7 +35,7 @@ export async function renderJob(
     throw new Error("Job does not have a normalized mediaPath");
   }
 
-  const dirInfo: DirInfo = {
+  return {
     name: job.id,
     path: job.artifacts.rootDir,
     videoFile: mediaPath,
@@ -57,7 +53,14 @@ export async function renderJob(
     ),
     repeatTimes: job.options.repeatTimes,
   };
+}
 
+export async function renderJob(
+  job: RevideoJob,
+  onProgress?: (progress: RenderProgress) => void,
+  signal?: AbortSignal
+): Promise<JobRenderResult> {
+  const dirInfo = buildJobDirInfo(job);
   const result = await render(dirInfo, onProgress, signal);
   const outputPath = path.resolve(process.cwd(), result.output);
   const coverPath = path.resolve(process.cwd(), "out", `${job.id}-cover.jpg`);

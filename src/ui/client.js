@@ -3,7 +3,7 @@ const platforms = ["bilibili", "douyin", "youtube", "tiktok", "xiaohongshu"];
 const state = {
   page: localStorage.getItem("uiPage") || "overview",
   jobs: [],
-  queue: { active: null, queued: [], recent: [] },
+  queue: { active: null, queued: [], scheduled: [], recent: [] },
   browser: null,
   translate: null,
   settings: null,
@@ -134,6 +134,13 @@ function currentStepStatus(job) {
   return job.workflow?.steps?.[step]?.status || (step === "completed" ? "completed" : "pending");
 }
 
+function queueStatusForJob(jobId) {
+  if (state.queue?.active?.jobId === jobId) return state.queue.active.status || "running";
+  if ((state.queue?.queued || []).some((run) => run.jobId === jobId)) return "queued";
+  if ((state.queue?.scheduled || []).some((run) => run.jobId === jobId)) return "scheduled";
+  return "";
+}
+
 function effectiveWorkflowCursor(job) {
   const runningIndex = workflowOrder.findIndex((step) => job.workflow?.steps?.[step]?.status === "running");
   if (runningIndex >= 0) return { step: workflowOrder[runningIndex], index: runningIndex, status: "running" };
@@ -161,6 +168,11 @@ function displayStepStatus(job, step) {
 }
 
 function derivedStatus(job) {
+  const queueStatus = queueStatusForJob(job.id);
+  if (queueStatus === "running" || queueStatus === "queued") {
+    return job.targets?.some((target) => target.status === "publishing") ? "publishing" : "running";
+  }
+  if (queueStatus === "scheduled") return "paused";
   if (currentStep(job) === "completed") return "completed";
   if (currentStep(job) === "cancelled") return "cancelled";
   const cursor = effectiveWorkflowCursor(job);
@@ -174,7 +186,7 @@ function derivedStatus(job) {
   ) {
     return "completed";
   }
-  if (cursor.status === "completed" || cursor.status === "skipped") return "paused";
+  if (cursor.status === "completed" || cursor.status === "skipped" || cursor.status === "paused") return "paused";
   return currentStep(job) === "created" ? "created" : "paused";
 }
 
@@ -201,6 +213,7 @@ function jobsSignature() {
   return stableStringify(
     state.jobs.map((job) => ({
       id: job.id,
+      queueStatus: queueStatusForJob(job.id),
       updatedAt: job.updatedAt,
       currentStep: job.workflow?.currentStep,
       steps: job.workflow?.steps,
@@ -218,6 +231,7 @@ function selectedJobSignature() {
   if (!job) return "";
   return stableStringify({
     id: job.id,
+    queueStatus: queueStatusForJob(job.id),
     updatedAt: job.updatedAt,
     workflow: job.workflow,
     targets: job.targets,
@@ -313,13 +327,13 @@ function renderChanged() {
   }
 
   const nextQueue = queueSignature();
+  const queueChanged = nextQueue !== state.rendered.queue;
   if (state.page === "overview" && (nextQueue !== state.rendered.queue || jobsSignature() !== state.rendered.jobs)) {
     renderOverview();
-    state.rendered.queue = nextQueue;
   }
 
   const nextJobs = jobsSignature();
-  if (nextJobs !== state.rendered.jobs) {
+  if (nextJobs !== state.rendered.jobs || (state.page === "tasks" && queueChanged)) {
     renderTaskStats();
     if (state.page === "tasks") renderJobs();
     state.rendered.jobs = nextJobs;
@@ -330,6 +344,7 @@ function renderChanged() {
     void renderJobDetail();
     state.rendered.detail = nextDetail;
   }
+  state.rendered.queue = nextQueue;
 
   const nextBrowser = browserSignature();
   if (state.page === "settings" && nextBrowser !== state.rendered.browser) {
@@ -517,7 +532,7 @@ function stepDetail(job, events, step) {
   const stepEvents = events.filter((event) => event.step === step).slice(-4).reverse();
   const commonEvents = stepEvents.length ? stepEvents.map((event) => `<li>${formatTime(event.ts)} ${escapeHtml(event.message)}</li>`).join("") : "<li>暂无事件</li>";
   if (step === "probing-source") {
-    return `<dl class="detail-dl"><dt>标题</dt><dd>${escapeHtml(metadata.title || "-")}</dd><dt>作者</dt><dd>${escapeHtml(job.source?.author || "-")}</dd><dt>时长</dt><dd>${metadata.durationSec || "-"} 秒</dd><dt>建议格式</dt><dd class="break-all">${escapeHtml(JSON.stringify(metadata.recommended || "-"))}</dd></dl>`;
+    return `<dl class="detail-dl"><dt>原始链接</dt><dd class="break-all">${escapeHtml(job.source?.url || "-")}</dd><dt>标题</dt><dd>${escapeHtml(metadata.title || "-")}</dd><dt>作者</dt><dd>${escapeHtml(job.source?.author || "-")}</dd><dt>时长</dt><dd>${metadata.durationSec || "-"} 秒</dd><dt>建议格式</dt><dd class="break-all">${escapeHtml(JSON.stringify(metadata.recommended || "-"))}</dd></dl>`;
   }
   if (step === "downloading-source") {
     return `<dl class="detail-dl"><dt>素材目录</dt><dd class="break-all">${escapeHtml(job.artifacts?.sourceDir || "-")}</dd><dt>下载质量</dt><dd>${escapeHtml(job.options?.downloadQuality || "auto")}</dd><dt>目标评论</dt><dd>${job.options?.targetCommentCount ?? "-"}</dd></dl>`;
@@ -555,17 +570,27 @@ async function renderJobDetail() {
   try {
     events = (await jsonFetch(`/api/jobs/${encodeURIComponent(job.id)}/events`)).events || [];
   } catch {}
+  const jobStatus = derivedStatus(job);
+  const hasFailedStep = Object.values(job.workflow?.steps || {}).some((step) => step.status === "failed");
+  const actionHtml = [
+    ["running", "publishing"].includes(jobStatus)
+      ? actionButton("暂停", `data-job-action="pause" data-job-id="${escapeHtml(job.id)}"`, "primary")
+      : "",
+    ["created", "paused", "failed", "cancelled"].includes(jobStatus)
+      ? actionButton("恢复", `data-job-action="resume" data-job-id="${escapeHtml(job.id)}"`, "primary")
+      : "",
+    hasFailedStep ? actionButton("重试失败步骤", `data-job-action="retry" data-job-id="${escapeHtml(job.id)}"`) : "",
+    ["running", "publishing", "completed", "failed", "paused"].includes(jobStatus)
+      ? actionButton("Remotion预览", `data-job-action="preview" data-job-id="${escapeHtml(job.id)}"`)
+      : "",
+    actionButton("删除", `data-job-action="delete" data-job-id="${escapeHtml(job.id)}"`, "danger"),
+  ].join("");
   el.jobDetail.innerHTML = `
     <div class="detail-summary">
       <div class="detail-id">${escapeHtml(job.id)}</div>
       <h4 class="detail-title">${escapeHtml(job.source?.metadata?.title || job.id)}</h4>
       <div class="detail-subtitle">${escapeHtml(job.source?.platform || "-")}</div>
-      <div class="detail-actions">
-        ${actionButton("开始", `data-job-action="start" data-job-id="${escapeHtml(job.id)}"`, "primary")}
-        ${actionButton("重试失败步骤", `data-job-action="retry" data-job-id="${escapeHtml(job.id)}"`)}
-        ${actionButton("发布", `data-job-action="publish" data-job-id="${escapeHtml(job.id)}"`)}
-        ${actionButton("取消", `data-job-action="cancel" data-job-id="${escapeHtml(job.id)}"`, "danger")}
-      </div>
+      <div class="detail-actions">${actionHtml}</div>
     </div>
     <div class="detail-metrics">
       <div class="info-tile"><div class="info-label">当前状态</div><div class="info-value">${badge(statusLabel(derivedStatus(job)), statusKind(derivedStatus(job)))}</div></div>
@@ -662,15 +687,11 @@ function collectSettings() {
 }
 
 async function runJobAction(jobId, action) {
-  if (action === "start") {
-    return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ steps: ["download", "normalize", "translate", "render", "generate-drafts", "preflight-publish"] }),
-    });
-  }
+  if (action === "preview") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/open-preview`, { method: "POST" });
   if (action === "retry") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
-  if (action === "cancel") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  if (action === "pause") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/pause`, { method: "POST" });
+  if (action === "resume") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
+  if (action === "delete") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
   return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/${action}`, { method: "POST" });
 }
 
@@ -714,11 +735,19 @@ el.jobDetail.addEventListener("click", async (event) => {
   const action = event.target.closest("[data-job-action]");
   if (!action) return;
   action.disabled = true;
+  const previewWindow = action.dataset.jobAction === "preview" ? window.open("", "_blank") : null;
   try {
-    await runJobAction(action.dataset.jobId, action.dataset.jobAction);
-    toast("已提交");
+    const result = await runJobAction(action.dataset.jobId, action.dataset.jobAction);
+    if (action.dataset.jobAction === "preview") {
+      if (previewWindow) previewWindow.location = result.studioUrl;
+      else if (result.studioUrl) window.open(result.studioUrl, "_blank");
+      toast("Remotion预览已切换");
+    } else {
+      toast("已提交");
+    }
     await refreshAll({ full: false });
   } catch (err) {
+    if (previewWindow) previewWindow.close();
     toast(err.message);
   } finally {
     action.disabled = false;
@@ -751,7 +780,7 @@ el.createJobForm.addEventListener("submit", async (event) => {
     state.selectedJobId = result.job.id;
     localStorage.setItem("selectedJobId", state.selectedJobId);
     el.sourceUrlInput.value = "";
-    toast("任务已创建");
+    toast("任务已创建并加入队列");
     await refreshAll({ full: true });
   } catch (err) {
     toast(err.message);

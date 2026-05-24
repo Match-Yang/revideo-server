@@ -105,6 +105,14 @@ export function listJobs(): RevideoJob[] {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+export function deleteJob(jobId: string): boolean {
+  const job = loadJob(jobId);
+  if (!job) return false;
+  fs.rmSync(job.artifacts.rootDir, { recursive: true, force: true });
+  writeIndex(readIndex().filter((id) => id !== jobId));
+  return true;
+}
+
 export function createJob(req: CreateJobRequest, platform: string, contentId?: string): RevideoJob {
   const jobId = createJobId(platform, contentId);
   const now = Date.now();
@@ -175,10 +183,12 @@ export function setJobStep(
   job.workflow.steps[step] = {
     step,
     status,
-    percent: patch.percent ?? prev?.percent ?? (status === "completed" ? 100 : 0),
-    attempts: patch.attempts ?? prev?.attempts ?? 1,
-    startedAt: patch.startedAt ?? prev?.startedAt ?? now,
-    ...(status === "completed" || status === "failed" || status === "skipped"
+    percent: patch.percent ?? (status === "completed" ? 100 : 0),
+    attempts:
+      patch.attempts ??
+      (status === "running" && prev?.status !== "running" ? (prev?.attempts || 0) + 1 : prev?.attempts ?? 1),
+    startedAt: patch.startedAt ?? (status === "running" && prev?.status === "running" ? prev.startedAt ?? now : now),
+    ...(status === "completed" || status === "failed" || status === "skipped" || status === "paused"
       ? { finishedAt: patch.finishedAt ?? now }
       : {}),
     ...(patch.error ? { error: patch.error } : {}),
