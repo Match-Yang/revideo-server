@@ -143,8 +143,20 @@
     .breakdown-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
     .create-form { display: grid; grid-template-columns: minmax(320px, 1fr) 120px 220px auto; gap: 12px; margin-top: 14px; }
     .filter-bar { display: grid; grid-template-columns: minmax(0, 1fr) 190px auto; gap: 12px; padding: 14px; border-bottom: 1px solid var(--border); }
-    .progress-bar { display: flex; width: 100%; min-width: 120px; gap: 4px; }
-    .progress-segment { height: 8px; flex: 1; border-radius: 999px; background: #e2e8f0; }
+    .progress-bar { display: flex; width: 100%; gap: 2px; align-items: center; }
+    .progress-segment { width: 6px; height: 24px; border-radius: 2px; background: #e2e8f0; flex-shrink: 0; }
+    .repeat-badge { font-size: 11px; color: var(--muted); white-space: nowrap; margin-left: 4px; font-weight: 600; }
+    .preview-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .jobs-table { table-layout: auto; }
+    .jobs-table th:nth-child(1), .jobs-table td:nth-child(1) { width: 60px; text-align: center; }
+    .jobs-table th:nth-child(2), .jobs-table td:nth-child(2) { width: 60px; white-space: nowrap; }
+    .jobs-table th:nth-child(3), .jobs-table td:nth-child(3) { width: 150px; min-width: 150px; }
+    .jobs-table th:nth-child(4), .jobs-table td:nth-child(4) { overflow: hidden; }
+    .jobs-table th:nth-child(5), .jobs-table td:nth-child(5) { width: 60px; text-align: center; }
+    .jobs-table td, .jobs-table th { padding-left: 10px; padding-right: 10px; }
+    .jobs-table td:first-child, .jobs-table th:first-child { padding-left: 14px; }
+    .jobs-table td:last-child, .jobs-table th:last-child { padding-right: 14px; }
+    .preview-btn { margin-left: auto; }
     .seg-done { background: var(--success); }
     .seg-current { background: var(--warning); }
     .seg-error { background: var(--error); }
@@ -171,12 +183,6 @@
     table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
     th { height: 42px; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--muted); text-align: left; font-weight: 600; }
     td { height: 56px; padding: 0 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-    th:nth-child(1), td:nth-child(1) { width: 48px; }
-    th:nth-child(2), td:nth-child(2) { width: 88px; }
-    th:nth-child(3), td:nth-child(3) { width: 132px; }
-    th:nth-child(4), td:nth-child(4) { width: 104px; }
-    th:nth-child(5), td:nth-child(5) { width: 158px; }
-    th:nth-child(6), td:nth-child(6) { width: 54px; }
     tbody tr[data-job-id] { cursor: pointer; }
     tbody tr[data-job-id]:hover { background: #f8fafc; }
     tr.selected { background: #f1f5f9; }
@@ -331,20 +337,25 @@
               <button id="refreshJobsBtn" class="btn">刷新列表</button>
             </div>
             <div class="table-wrap">
-              <table>
+              <table class="jobs-table">
+                <colgroup>
+                  <col style="width:60px">
+                  <col style="width:60px">
+                  <col style="width:60px">
+                  <col>
+                  <col style="width:150px">
+                </colgroup>
                 <thead>
                   <tr>
                     <th>序号</th>
                     <th>状态</th>
                     <th>进度</th>
-                    <th>创建时间</th>
-                    <th>原始链接</th>
-                    <th>重复</th>
-                    <th>标题</th>
+                    <th>任务信息</th>
+                    <th>预览</th>
                   </tr>
                 </thead>
                 <tbody id="jobsTable">
-                  <tr><td colspan="7" style="text-align:center;color:var(--muted);height:96px;">加载中</td></tr>
+                  <tr><td colspan="5" style="text-align:center;color:var(--muted);height:96px;">加载中</td></tr>
                 </tbody>
               </table>
             </div>

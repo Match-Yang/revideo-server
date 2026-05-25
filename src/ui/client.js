@@ -501,29 +501,39 @@ function progressSegments(job) {
 function filteredJobs() {
   const q = el.jobSearch.value.trim().toLowerCase();
   const status = el.jobStatusFilter.value;
-  return state.jobs.filter((job) => {
-    const haystack = `${job.id} ${job.source?.url || ""} ${job.source?.metadata?.title || ""}`.toLowerCase();
-    return (!q || haystack.includes(q)) && (!status || derivedStatus(job) === status);
-  });
+  return state.jobs
+    .filter((job) => {
+      const haystack = `${job.id} ${job.source?.url || ""} ${job.source?.metadata?.title || ""}`.toLowerCase();
+      return (!q || haystack.includes(q)) && (!status || derivedStatus(job) === status);
+    })
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function isTranslateCompleted(job) {
+  const step = job.workflow?.steps?.["translating-assets"];
+  return step?.status === "completed" || step?.status === "skipped";
 }
 
 function renderJobs() {
   const jobs = filteredJobs();
   if (!jobs.length) {
-    el.jobsTable.innerHTML = `<tr><td colspan="7" style="height:96px;text-align:center;color:var(--muted);">没有匹配的任务</td></tr>`;
+    el.jobsTable.innerHTML = `<tr><td colspan="5" style="height:96px;text-align:center;color:var(--muted);">没有匹配的任务</td></tr>`;
     return;
   }
-  el.jobsTable.innerHTML = jobs.map((job, index) => `
+  el.jobsTable.innerHTML = jobs.map((job, index) => {
+    const canPreview = isTranslateCompleted(job);
+    return `
     <tr data-job-id="${escapeHtml(job.id)}" class="${job.id === state.selectedJobId ? "selected" : ""}">
       <td>${index + 1}</td>
       <td>${badge(statusLabel(derivedStatus(job)), statusKind(derivedStatus(job)))}</td>
-      <td><div class="progress-bar">${progressSegments(job)}</div></td>
-      <td class="text-small">${formatTime(job.createdAt)}</td>
-      <td><div class="truncate text-small" style="max-width:260px;">${escapeHtml(job.source?.url || "-")}</div></td>
-      <td>${job.options?.repeatTimes || 1}</td>
-      <td><div class="truncate" style="max-width:360px;font-weight:700;">${escapeHtml(job.source?.metadata?.title || job.id)}</div></td>
-    </tr>
-  `).join("");
+      <td><div class="progress-bar">${progressSegments(job)}<span class="repeat-badge">×${job.options?.repeatTimes || 1}</span></div></td>
+      <td>
+        <div class="truncate" style="font-weight:700;">${escapeHtml(job.source?.metadata?.title || job.id)}</div>
+        <div class="truncate text-small" style="margin-top:2px;">${escapeHtml(job.source?.url || "-")}</div>
+      </td>
+      <td><button class="btn btn-sm btn-outline preview-btn" data-preview-job="${escapeHtml(job.id)}" ${canPreview ? "" : "disabled title=\"翻译审核完成后可预览\""}>预览</button></td>
+    </tr>`;
+  }).join("");
 }
 
 function stepDetail(job, events, step) {
@@ -725,6 +735,22 @@ el.recentFailures.addEventListener("click", async (event) => {
 });
 
 el.jobsTable.addEventListener("click", async (event) => {
+  const previewBtn = event.target.closest("[data-preview-job]");
+  if (previewBtn && !previewBtn.disabled) {
+    event.stopPropagation();
+    const jobId = previewBtn.dataset.previewJob;
+    const previewWindow = window.open("", "_blank");
+    try {
+      const result = await runJobAction(jobId, "preview");
+      if (previewWindow) previewWindow.location = result.studioUrl;
+      else if (result.studioUrl) window.open(result.studioUrl, "_blank");
+      toast("Remotion预览已开启");
+    } catch (err) {
+      if (previewWindow) previewWindow.close();
+      toast(err.message);
+    }
+    return;
+  }
   const row = event.target.closest("tr[data-job-id]");
   if (!row) return;
   state.selectedJobId = row.dataset.jobId;
