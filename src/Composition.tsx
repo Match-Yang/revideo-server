@@ -181,6 +181,17 @@ function SubtitleOverlay({ cues }: { cues: SubtitleCue[] }) {
 
 // ---- Comment Components ----
 
+function formatRelativeTime(ts: number): string {
+  const now = Date.now() / 1000;
+  const diff = now - ts;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
+  if (diff < 2592000) return `${Math.floor(diff / 86400)}天前`;
+  if (diff < 31536000) return `${Math.floor(diff / 2592000)}个月前`;
+  return `${Math.floor(diff / 31536000)}年前`;
+}
+
 function CommentItem({ comment }: { comment: Comment }) {
   const replyCount = comment.replies?.length ?? 0;
 
@@ -292,6 +303,7 @@ function CommentItem({ comment }: { comment: Comment }) {
         >
           <span>{comment.like_count > 0 ? `👍 ${comment.like_count}` : "👍"}</span>
           {replyCount > 0 && <span>💬 {replyCount}条回复</span>}
+          {comment.timestamp > 0 && <span>{formatRelativeTime(comment.timestamp)}</span>}
         </div>
       </div>
     </div>

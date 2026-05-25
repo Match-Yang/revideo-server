@@ -25,6 +25,7 @@ export type JobStep =
   | "translating-assets"
   | "moderating-assets"
   | "rendering-video"
+  | "generating-cover-image"
   | "generating-platform-drafts"
   | "preflighting-targets"
   | "publishing-targets"
@@ -86,6 +87,7 @@ export interface JobArtifacts {
   publishDir: string;
   outputVideo?: string;
   coverImage?: string;
+  coverImagePortrait?: string;
 }
 
 export interface RevideoJob {

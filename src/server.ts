@@ -25,6 +25,7 @@ import { buildJobDirInfo, renderJob } from "./jobs/render-job";
 import { translateJobAssets } from "./jobs/translate-job";
 import type { CreateJobRequest, JobStep } from "./jobs/types";
 import { generateDrafts } from "./jobs/drafts";
+import { generateCover } from "./jobs/generate-cover";
 import {
   preflightJobTarget,
   publishJobTarget,
@@ -181,7 +182,7 @@ function snapshotQueue() {
 }
 
 function defaultRunSteps(): string[] {
-  const steps = ["download", "normalize", "translate", "render", "generate-drafts", "preflight-publish"];
+  const steps = ["download", "normalize", "translate", "render", "generate-cover", "generate-drafts", "preflight-publish"];
   return loadSettings().publishing.scheduleMode === "immediate" ? [...steps, "publish"] : steps;
 }
 
@@ -194,9 +195,10 @@ function withConfiguredPublishStep(steps: string[]): string[] {
 function runStepsFromJobStep(step: JobStep, status?: string): string[] {
   const stepCompleted = status === "completed" || status === "skipped";
   if (step === "downloading-source") return defaultRunSteps();
-  if (step === "normalizing-assets") return withConfiguredPublishStep(stepCompleted ? ["translate", "render", "generate-drafts", "preflight-publish"] : ["normalize", "translate", "render", "generate-drafts", "preflight-publish"]);
-  if (step === "translating-assets" || step === "moderating-assets") return withConfiguredPublishStep(stepCompleted ? ["render", "generate-drafts", "preflight-publish"] : ["translate", "render", "generate-drafts", "preflight-publish"]);
-  if (step === "rendering-video") return withConfiguredPublishStep(stepCompleted ? ["generate-drafts", "preflight-publish"] : ["render", "generate-drafts", "preflight-publish"]);
+  if (step === "normalizing-assets") return withConfiguredPublishStep(stepCompleted ? ["translate", "render", "generate-cover", "generate-drafts", "preflight-publish"] : ["normalize", "translate", "render", "generate-cover", "generate-drafts", "preflight-publish"]);
+  if (step === "translating-assets" || step === "moderating-assets") return withConfiguredPublishStep(stepCompleted ? ["render", "generate-cover", "generate-drafts", "preflight-publish"] : ["translate", "render", "generate-cover", "generate-drafts", "preflight-publish"]);
+  if (step === "rendering-video") return withConfiguredPublishStep(stepCompleted ? ["generate-cover", "generate-drafts", "preflight-publish"] : ["render", "generate-cover", "generate-drafts", "preflight-publish"]);
+  if (step === "generating-cover-image") return withConfiguredPublishStep(stepCompleted ? ["generate-drafts", "preflight-publish"] : ["generate-cover", "generate-drafts", "preflight-publish"]);
   if (step === "generating-platform-drafts") return withConfiguredPublishStep(stepCompleted ? ["preflight-publish"] : ["generate-drafts", "preflight-publish"]);
   if (step === "preflighting-targets") return stepCompleted ? withConfiguredPublishStep([]) : withConfiguredPublishStep(["preflight-publish"]);
   if (step === "publishing-targets") return ["publish"];
@@ -649,6 +651,46 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
       } finally {
         currentRender = null;
       }
+      }
+    }
+
+    assertRunNotCancelled(options);
+    if (steps.includes("generate-cover")) {
+      const latest = loadJob(job.id) || job;
+      setJobStep(job.id, "generating-cover-image", "running", { percent: 0 });
+      appendJobEvent({
+        jobId: job.id,
+        level: "info",
+        step: "generating-cover-image",
+        message: "Cover generation started",
+      });
+      try {
+        const coverResult = await generateCover(latest);
+        const next = loadJob(job.id) || latest;
+        next.artifacts.coverImage = coverResult.coverLandscape;
+        next.artifacts.coverImagePortrait = coverResult.coverPortrait;
+        saveJob(next);
+        setJobStep(job.id, "generating-cover-image", "completed", { percent: 100 });
+        results.generateCover = coverResult;
+        appendJobEvent({
+          jobId: job.id,
+          level: "info",
+          step: "generating-cover-image",
+          message: "Cover generation completed",
+          data: { landscape: coverResult.coverLandscape, portrait: coverResult.coverPortrait },
+        });
+      } catch (err) {
+        console.warn(`[Cover] Cover generation failed, using default cover: ${err}`);
+        appendJobEvent({
+          jobId: job.id,
+          level: "warn",
+          step: "generating-cover-image",
+          message: `Cover generation failed: ${err instanceof Error ? err.message : err}`,
+        });
+        setJobStep(job.id, "generating-cover-image", "failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Non-fatal: continue pipeline without AI cover
       }
     }
 

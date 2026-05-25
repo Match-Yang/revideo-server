@@ -20,6 +20,7 @@ const ORDERED_WORKFLOW_STEPS: JobStep[] = [
   "translating-assets",
   "moderating-assets",
   "rendering-video",
+  "generating-cover-image",
   "generating-platform-drafts",
   "preflighting-targets",
   "publishing-targets",
