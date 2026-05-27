@@ -306,13 +306,34 @@ async function publishBilibili(
       );
     }
 
-    // Add tags
+    // Clear existing tags, then add new ones
+    // B站 tag DOM: .tag-pre-wrp > .label-item-v2-container > svg.close.icon-sprite
     if (tags.length > 0) {
-      onProgress({ stage: "filling", percent: 55, message: "正在添加标签..." });
-      const tagInput = await page.$('input.input-val[placeholder*="创建标签"]');
-      if (tagInput) {
+      onProgress({ stage: "filling", percent: 55, message: "正在设置标签..." });
+
+      // Remove existing tags one by one (clicking all at once causes missed clicks)
+      for (;;) {
+        const removed = await page.evaluate(() => {
+          const item = Array.from(document.querySelectorAll('.tag-pre-wrp .label-item-v2-container'))
+            .find(el => (el as HTMLElement).offsetHeight > 0);
+          if (!item) return false;
+          const closeBtn = item.querySelector('svg.close');
+          if (closeBtn) closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          return true;
+        });
+        if (!removed) break;
+        await sleep(200);
+      }
+
+      // Find the visible tag input
+      const tagInput = await page.evaluateHandle(() => {
+        return Array.from(document.querySelectorAll('input.input-val[placeholder*="创建标签"]'))
+          .find(el => (el as HTMLElement).offsetHeight > 0) || null;
+      });
+      if (tagInput && tagInput.asElement()) {
+        const inputEl = tagInput.asElement()!;
         for (const tag of tags) {
-          await tagInput.click();
+          await inputEl.click();
           await page.evaluate(
             (el: HTMLInputElement, val: string) => {
               const setter = Object.getOwnPropertyDescriptor(
@@ -322,7 +343,7 @@ async function publishBilibili(
               setter?.call(el, val);
               el.dispatchEvent(new Event("input", { bubbles: true }));
             },
-            tagInput,
+            inputEl,
             tag
           );
           await page.keyboard.press("Enter");
@@ -418,38 +439,38 @@ async function publishBilibili(
       }
       if (fs.existsSync(coverPath)) {
         console.log('[Cover] Using cover:', coverPath);
-        // B站封面上传流程（已验证）：
-        // 1. 点击 .edit-text "封面设置" → 打开封面制作弹窗
-        // 2. 弹窗内有 input[type="file"][accept="image/png, image/jpeg"]
-        // 3. 直接 uploadFile 到该 input 即可
-        // 注意：file input 只在弹窗打开后才动态创建！
-        const editBtn = await page.$('.edit-text');
+        // Wait for cover area to load — B站 may still be processing the video
+        const editBtn = await page.waitForSelector('.edit-text', { timeout: 30000 }).catch(() => null);
         if (editBtn) {
           console.log('[Cover] Clicking 封面设置...');
           await editBtn.click();
-          console.log('[Cover] Waiting for dialog to open...');
-          // Wait for cover dialog to appear (check for image file input)
-          try {
-            await page.waitForFunction(
-              () => !!document.querySelector('input[type="file"][accept*="image"]'),
-              { timeout: 10000 }
-            );
-            console.log('[Cover] Dialog opened, image file input found');
-          } catch (e) {
-            console.log('[Cover] Dialog did not open after 10s, page HTML snippet:');
-            const snippet = await page.evaluate(() => {
-              const ce = document.querySelector('.cover-empty');
-              return ce ? ce.outerHTML.substring(0, 300) : 'no .cover-empty';
-            });
-            console.log('[Cover]', snippet);
-            // Try clicking the parent div instead of the span
-            await page.evaluate(() => {
-              const ce = document.querySelector('.cover-empty');
-              if (ce) (ce as HTMLElement).click();
-            });
-            await sleep(3000);
+
+          // Wait for cover dialog to appear with retry
+          let dialogOpened = false;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              await page.waitForFunction(
+                () => !!document.querySelector('input[type="file"][accept*="image"]'),
+                { timeout: 10000 }
+              );
+              dialogOpened = true;
+              console.log(`[Cover] Dialog opened on attempt ${attempt + 1}`);
+              break;
+            } catch {
+              console.log(`[Cover] Dialog not opened on attempt ${attempt + 1}, retrying...`);
+              // Close any blocking popups and retry
+              await page.keyboard.press("Escape");
+              await sleep(500);
+              await editBtn.click();
+              await sleep(2000);
+            }
           }
-          // 勾选"双比例同步改动"checkbox，这样上传一次封面自动同步4:3和16:9
+
+          if (!dialogOpened) {
+            console.log('[Cover] Dialog failed to open after 3 attempts');
+          }
+
+          // 勾选"双比例同步改动"checkbox
           await page.evaluate(() => {
             const checkbox = document.querySelector('.bcc-checkbox-checkbox');
             if (checkbox) {
@@ -459,9 +480,9 @@ async function publishBilibili(
               }
             }
           });
-          console.log('[Cover] Checked 双比例同步改动');
           await sleep(500);
-          // 弹窗已打开（或重试后），找 image file input
+
+          // Upload cover image
           const coverInputs = await page.$$('input[type="file"][accept*="image"]');
           console.log('[Cover] Image file inputs found:', coverInputs.length);
           if (coverInputs.length > 0) {
@@ -479,21 +500,22 @@ async function publishBilibili(
               },
               { timeout: 30000 }
             ).catch(() => {});
-            // Extra wait for server-side processing before clicking confirm
             await sleep(5000);
           } else {
             console.log('[Cover] No image file input found, cannot upload cover');
           }
-          // 关闭封面制作弹窗 - 点击"完成"按钮确认封面
+
+          // Click "完成" to confirm cover
           const confirmResult = await page.evaluate(() => {
             const submitBtn = document.querySelector('.cover-editor-button .button.submit');
             if (submitBtn) { (submitBtn as HTMLElement).click(); return 'clicked submit'; }
             const fallback = Array.from(document.querySelectorAll('span, button, div'))
-              .find(el => el.textContent?.trim() === '完成' && el.classList.contains('submit') && (el as HTMLElement).offsetHeight > 0);
+              .find(el => el.textContent?.trim() === '完成' && (el as HTMLElement).offsetHeight > 0);
             if (fallback) { (fallback as HTMLElement).click(); return 'clicked fallback'; }
             return 'not found';
           });
           console.log('[Cover] Close dialog:', confirmResult);
+
           // Wait for dialog close and cover to be applied to form
           await page.waitForFunction(
             () => {
@@ -509,7 +531,7 @@ async function publishBilibili(
             console.log('[Cover] Could not confirm cover on form, proceeding anyway');
           });
         } else {
-          console.log('[Cover] No 封面设置 button found, B站 will use auto-generated cover');
+          console.log('[Cover] No 封面设置 button found after 30s, B站 will use auto-generated cover');
         }
       } else {
         console.log('[Cover] No cover image found, B站 will use auto-generated cover');

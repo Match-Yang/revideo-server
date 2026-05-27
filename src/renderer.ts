@@ -332,16 +332,21 @@ export async function render(
 
   emit("extracting-cover", 96, "提取封面...");
 
-  // Extract first frame from the ORIGINAL video as cover image
+  // Only extract a cover if generate-cover step hasn't already produced one
   const coverPath = `out/${dir.name}-cover.jpg`;
-  try {
-    execSync(
-      `ffmpeg -y -i "${dir.videoFile}" -frames:v 1 -q:v 2 "${coverPath}"`,
-      { stdio: "pipe", cwd: process.cwd() }
-    );
-    console.log(`[Render] Cover saved: ${coverPath}`);
-  } catch (err) {
-    console.warn(`[Render] Failed to extract cover: ${err}`);
+  const absCoverPath = path.resolve(process.cwd(), coverPath);
+  if (!fs.existsSync(absCoverPath)) {
+    try {
+      execSync(
+        `ffmpeg -y -i "${dir.videoFile}" -frames:v 1 -q:v 2 "${coverPath}"`,
+        { stdio: "pipe", cwd: process.cwd() }
+      );
+      console.log(`[Render] Cover saved: ${coverPath}`);
+    } catch (err) {
+      console.warn(`[Render] Failed to extract cover: ${err}`);
+    }
+  } else {
+    console.log(`[Render] Cover already exists, skipping extraction`);
   }
 
   emit("done", 100, "渲染完成");

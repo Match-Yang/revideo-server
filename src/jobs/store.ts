@@ -19,8 +19,8 @@ const ORDERED_WORKFLOW_STEPS: JobStep[] = [
   "normalizing-assets",
   "translating-assets",
   "moderating-assets",
-  "rendering-video",
   "generating-cover-image",
+  "rendering-video",
   "generating-platform-drafts",
   "preflighting-targets",
   "publishing-targets",
@@ -120,6 +120,12 @@ export function createJob(req: CreateJobRequest, platform: string, contentId?: s
   const artifacts = createArtifacts(jobId);
   if (fs.existsSync(artifacts.rootDir)) {
     fs.rmSync(artifacts.rootDir, { recursive: true, force: true });
+  }
+  // Delete old render output (out/{jobId}.mp4 and cover)
+  const outDir = path.resolve(process.cwd(), "out");
+  for (const ext of [".mp4", "-cover.jpg", "-cover-portrait.jpg"]) {
+    const f = path.join(outDir, `${jobId}${ext}`);
+    if (fs.existsSync(f)) fs.rmSync(f);
   }
   const stepState: WorkflowStepState = {
     step: "created",

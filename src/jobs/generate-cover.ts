@@ -192,7 +192,7 @@ async function selectCoverWithVision(
 // 3. Compose cover image with text overlay
 // ---------------------------------------------------------------------------
 
-const LANDSCAPE_W = 1920;
+const LANDSCAPE_W = 1440;
 const LANDSCAPE_H = 1080;
 const PORTRAIT_W = 1080;
 const PORTRAIT_H = 1920;
@@ -214,9 +214,16 @@ function escapeXml(str: string): string {
 }
 
 function landscapeTextSvg(texts: string[]): Buffer {
-  const fontSizes = [360, 260, 100];
+  const fontSizes = [240, 130, 100];
+  const lineGap = 20;
   const x = LANDSCAPE_W * 0.06;
-  const yPositions = [LANDSCAPE_H * 0.2, LANDSCAPE_H * 0.5, LANDSCAPE_H * 0.72];
+  const totalHeight = fontSizes[0] + fontSizes[1] + fontSizes[2] + lineGap * 2;
+  const startY = (LANDSCAPE_H - totalHeight) / 2;
+  const yPositions = [
+    startY + fontSizes[0] / 2,
+    startY + fontSizes[0] + lineGap + fontSizes[1] / 2,
+    startY + fontSizes[0] + lineGap + fontSizes[1] + lineGap + fontSizes[2] / 2,
+  ];
 
   const els = texts
     .map((t, i) => {
@@ -231,14 +238,25 @@ function landscapeTextSvg(texts: string[]): Buffer {
 }
 
 function portraitTextSvg(texts: string[]): Buffer {
-  const fontSizes = [280, 200, 80];
-  const y = PORTRAIT_H * 0.06;
-  const xPositions = [PORTRAIT_W * 0.18, PORTRAIT_W * 0.48, PORTRAIT_W * 0.75];
+  const fontSizes = [187, 100, 80];
+  const lineGap = 20;
+  const totalHeight = fontSizes[0] + fontSizes[1] + fontSizes[2] + lineGap * 2;
+  const startY = (PORTRAIT_H - totalHeight) / 2;
+  const xPositions = [
+    PORTRAIT_W * 0.18,
+    PORTRAIT_W * 0.48,
+    PORTRAIT_W * 0.75,
+  ];
+  const yPositions = [
+    startY + fontSizes[0] / 2,
+    startY + fontSizes[0] + lineGap + fontSizes[1] / 2,
+    startY + fontSizes[0] + lineGap + fontSizes[1] + lineGap + fontSizes[2] / 2,
+  ];
 
   const els = texts
     .map((t, i) => {
       const s = TEXT_STYLES[i];
-      return `<text x="${xPositions[i]}" y="${y}" dominant-baseline="hanging" font-size="${fontSizes[i]}" font-weight="900" fill="${s.color}" font-family="${FONT_STACK}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" paint-order="stroke" stroke-linejoin="round" writing-mode="tb">${escapeXml(t)}</text>`;
+      return `<text x="${xPositions[i]}" y="${yPositions[i]}" dominant-baseline="hanging" font-size="${fontSizes[i]}" font-weight="900" fill="${s.color}" font-family="${FONT_STACK}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" paint-order="stroke" stroke-linejoin="round" writing-mode="tb">${escapeXml(t)}</text>`;
     })
     .join("");
 
