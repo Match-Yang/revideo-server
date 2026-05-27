@@ -79,7 +79,7 @@ const COVER_VISION_PROMPT = [
   "2. 根据视频标题和描述的实际内容，生成三句封面文案，要求：",
   "   - 文案必须紧扣视频的实际主题，让人一看就知道视频讲什么",
   "   - 整体要有吸引力、悬念感或信息量，激发点击欲望",
-  "   - 第一句：不超过4个字，是点睛的语气/情绪词（如：太牛了、哇塞、666、夸张、离谱、绝了、快看、必看、炸裂等等）",
+  "   - 第一句：不超过4个字，是点睛的语气/情绪词（如：海外评论、太牛了、哇塞、666、夸张、离谱、绝了、快看、必看、炸裂等等）",
   "   - 第二句：3到8个字，概括视频核心信息的前半段",
   "   - 第三句：不超过10个字，补全核心信息的后半段",
   "   - 第二句+第三句连读要通顺、有完整含义",
@@ -242,11 +242,7 @@ function portraitTextSvg(texts: string[]): Buffer {
   const lineGap = 20;
   const totalHeight = fontSizes[0] + fontSizes[1] + fontSizes[2] + lineGap * 2;
   const startY = (PORTRAIT_H - totalHeight) / 2;
-  const xPositions = [
-    PORTRAIT_W * 0.18,
-    PORTRAIT_W * 0.48,
-    PORTRAIT_W * 0.75,
-  ];
+  const xPositions = [PORTRAIT_W * 0.18, PORTRAIT_W * 0.48, PORTRAIT_W * 0.75];
   const yPositions = [
     startY + fontSizes[0] / 2,
     startY + fontSizes[0] + lineGap + fontSizes[1] / 2,
