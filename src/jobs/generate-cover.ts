@@ -270,8 +270,14 @@ async function composeCover(
   const h = orientation === "landscape" ? LANDSCAPE_H : PORTRAIT_H;
 
   const baseImage = sharp(framePath)
-    .resize(w, h, { fit: "cover", position: "center" })
-    .modulate({ brightness: 0.55 });
+    .resize(w, h, { fit: "cover", position: "center" });
+
+  // No text = plain screenshot, skip overlay and text composition
+  if (texts.length === 0) {
+    return baseImage.jpeg({ quality: 92 }).toBuffer();
+  }
+
+  const darkened = baseImage.modulate({ brightness: 0.55 });
 
   const overlaySvg = `<svg width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="rgba(0,0,0,0.35)"/></svg>`;
   const overlayBuf = Buffer.from(overlaySvg);
@@ -281,7 +287,7 @@ async function composeCover(
       ? landscapeTextSvg(texts)
       : portraitTextSvg(texts);
 
-  return baseImage
+  return darkened
     .composite([
       { input: overlayBuf, blend: "over" },
       { input: textBuf, blend: "over" },
@@ -294,7 +300,7 @@ async function composeCover(
 // 4. Orchestrate
 // ---------------------------------------------------------------------------
 
-export async function generateCover(job: RevideoJob): Promise<CoverResult> {
+export async function generateCover(job: RevideoJob, smartCover = true): Promise<CoverResult> {
   const normalized = job.source.metadata?.normalizedAssets as
     | { mediaPath?: string }
     | undefined;
@@ -316,15 +322,15 @@ export async function generateCover(job: RevideoJob): Promise<CoverResult> {
   if (frames.length < 2) {
     throw new Error("Failed to extract enough frames for cover generation");
   }
-  console.log(`[Cover] Extracted ${frames.length} frames`);
+  console.log(`[Cover] Extracted ${frames.length} frames, smartCover=${smartCover}`);
 
   const selection = await selectCoverWithVision(frames, title, description);
   console.log(
-    `[Cover] Selected frame ${selection.index}: "${selection.text1}" / "${selection.text2}" / "${selection.text3}"`,
+    `[Cover] Selected frame ${selection.index}${smartCover ? `: "${selection.text1}" / "${selection.text2}" / "${selection.text3}"` : ""}`,
   );
 
   const selectedFrame = frames[selection.index - 1];
-  const texts = [selection.text1, selection.text2, selection.text3];
+  const texts = smartCover ? [selection.text1, selection.text2, selection.text3] : [];
 
   const outDir = path.join(process.cwd(), "out");
   fs.mkdirSync(outDir, { recursive: true });

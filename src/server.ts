@@ -626,7 +626,7 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         message: "Cover generation started",
       });
       try {
-        const coverResult = await generateCover(latest);
+        const coverResult = await generateCover(latest, loadSettings().publishing.smartCover !== false);
         const next = loadJob(job.id) || latest;
         next.artifacts.coverImage = coverResult.coverLandscape;
         next.artifacts.coverImagePortrait = coverResult.coverPortrait;

@@ -15,8 +15,6 @@ const state = {
 
 const el = {
   updatedAt: document.getElementById("updatedAt"),
-  refreshBtn: document.getElementById("refreshBtn"),
-  sideStatus: document.getElementById("sideStatus"),
   navItems: [...document.querySelectorAll(".nav-item")],
   pages: [...document.querySelectorAll(".page")],
   overviewCards: document.getElementById("overviewCards"),
@@ -32,6 +30,8 @@ const el = {
   jobSearch: document.getElementById("jobSearch"),
   jobStatusFilter: document.getElementById("jobStatusFilter"),
   refreshJobsBtn: document.getElementById("refreshJobsBtn"),
+  pauseAllBtn: document.getElementById("pauseAllBtn"),
+  resumeAllBtn: document.getElementById("resumeAllBtn"),
   jobsTable: document.getElementById("jobsTable"),
   jobDetail: document.getElementById("jobDetail"),
   settingsForm: document.getElementById("settingsForm"),
@@ -243,16 +243,6 @@ function selectedJobSignature() {
   });
 }
 
-function sideStatusSignature() {
-  const provider = state.translate?.providers?.[0];
-  return stableStringify({
-    browserRunning: state.browser?.running,
-    browserInstalled: state.browser?.installed,
-    translateConfigured: provider?.configured,
-    queueActive: state.queue?.active?.id,
-  });
-}
-
 function queueSignature() {
   return stableStringify(state.queue);
 }
@@ -305,7 +295,6 @@ async function refreshAll(options = {}) {
 
 function renderAll() {
   switchPage(state.page);
-  renderSideStatus();
   renderOverview();
   renderTaskStats();
   renderCreateTask();
@@ -314,7 +303,8 @@ function renderAll() {
   renderJobDetail();
   renderSettings();
   renderBrowser();
-  state.rendered.sideStatus = sideStatusSignature();
+
+
   state.rendered.jobs = jobsSignature();
   state.rendered.detail = selectedJobSignature();
   state.rendered.queue = queueSignature();
@@ -322,12 +312,6 @@ function renderAll() {
 }
 
 function renderChanged() {
-  const nextSideStatus = sideStatusSignature();
-  if (nextSideStatus !== state.rendered.sideStatus) {
-    renderSideStatus();
-    state.rendered.sideStatus = nextSideStatus;
-  }
-
   const nextQueue = queueSignature();
   const queueChanged = nextQueue !== state.rendered.queue;
   if (state.page === "overview" && (nextQueue !== state.rendered.queue || jobsSignature() !== state.rendered.jobs)) {
@@ -337,7 +321,13 @@ function renderChanged() {
   const nextJobs = jobsSignature();
   if (nextJobs !== state.rendered.jobs || (state.page === "tasks" && queueChanged)) {
     renderTaskStats();
-    if (state.page === "tasks") renderJobs();
+    if (state.page === "tasks") {
+      renderJobs();
+      const hasRunning = state.jobs.some((j) => ["running", "publishing"].includes(derivedStatus(j)));
+      const hasPaused = state.jobs.some((j) => ["created", "paused", "failed"].includes(derivedStatus(j)));
+      el.pauseAllBtn.style.display = hasRunning ? "" : "none";
+      el.resumeAllBtn.style.display = hasPaused ? "" : "none";
+    }
     state.rendered.jobs = nextJobs;
   }
 
@@ -361,15 +351,6 @@ function renderTaskStats() {
   if (!total || !running) return;
   total.textContent = String(state.jobs.length);
   running.textContent = String(state.jobs.filter((job) => ["running", "publishing"].includes(derivedStatus(job))).length);
-}
-
-function renderSideStatus() {
-  const provider = state.translate?.providers?.[0];
-  el.sideStatus.innerHTML = [
-    badge(`浏览器 ${state.browser?.running ? "运行中" : state.browser?.installed ? "可用" : "未启动"}`, state.browser?.running ? "completed" : "warn"),
-    badge(`翻译 ${provider?.configured ? "已配置" : "未配置"}`, provider?.configured ? "completed" : "failed"),
-    badge(`队列 ${state.queue.active ? "忙碌" : "空闲"}`, state.queue.active ? "running" : "completed"),
-  ].join("");
 }
 
 function groupCount(items, getKey) {
@@ -509,19 +490,14 @@ function filteredJobs() {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-function isTranslateCompleted(job) {
-  const step = job.workflow?.steps?.["translating-assets"];
-  return step?.status === "completed" || step?.status === "skipped";
-}
 
 function renderJobs() {
   const jobs = filteredJobs();
   if (!jobs.length) {
-    el.jobsTable.innerHTML = `<tr><td colspan="5" style="height:96px;text-align:center;color:var(--muted);">没有匹配的任务</td></tr>`;
+    el.jobsTable.innerHTML = `<tr><td colspan="4" style="height:96px;text-align:center;color:var(--muted);">没有匹配的任务</td></tr>`;
     return;
   }
   el.jobsTable.innerHTML = jobs.map((job, index) => {
-    const canPreview = isTranslateCompleted(job);
     return `
     <tr data-job-id="${escapeHtml(job.id)}" class="${job.id === state.selectedJobId ? "selected" : ""}">
       <td>${index + 1}</td>
@@ -531,7 +507,6 @@ function renderJobs() {
         <div class="truncate" style="font-weight:700;">${escapeHtml(job.source?.metadata?.title || job.id)}</div>
         <div class="truncate text-small" style="margin-top:2px;">${escapeHtml(job.source?.url || "-")}</div>
       </td>
-      <td><button class="btn btn-sm btn-outline preview-btn" data-preview-job="${escapeHtml(job.id)}" ${canPreview ? "" : "disabled title=\"翻译审核完成后可预览\""}>预览</button></td>
     </tr>`;
   }).join("");
 }
@@ -592,9 +567,6 @@ async function renderJobDetail() {
       ? actionButton("恢复", `data-job-action="resume" data-job-id="${escapeHtml(job.id)}"`, "primary")
       : "",
     hasFailedStep ? actionButton("重试失败步骤", `data-job-action="retry" data-job-id="${escapeHtml(job.id)}"`) : "",
-    ["running", "publishing", "completed", "failed", "paused"].includes(jobStatus)
-      ? actionButton("Remotion预览", `data-job-action="preview" data-job-id="${escapeHtml(job.id)}"`)
-      : "",
     actionButton("删除", `data-job-action="delete" data-job-id="${escapeHtml(job.id)}"`, "danger"),
   ].join("");
   el.jobDetail.innerHTML = `
@@ -699,7 +671,7 @@ function collectSettings() {
 }
 
 async function runJobAction(jobId, action) {
-  if (action === "preview") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/open-preview`, { method: "POST" });
+
   if (action === "retry") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
   if (action === "pause") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/pause`, { method: "POST" });
   if (action === "resume") return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
@@ -711,8 +683,23 @@ el.navItems.forEach((item) => item.addEventListener("click", () => {
   switchPage(item.dataset.page);
   renderChanged();
 }));
-el.refreshBtn.addEventListener("click", () => refreshAll({ full: true }).catch((err) => toast(err.message)));
+
+
 el.refreshJobsBtn.addEventListener("click", () => refreshAll({ full: false }).catch((err) => toast(err.message)));
+el.pauseAllBtn.addEventListener("click", async () => {
+  el.pauseAllBtn.disabled = true;
+  const running = state.jobs.filter((j) => ["running", "publishing"].includes(derivedStatus(j)));
+  await Promise.allSettled(running.map((j) => runJobAction(j.id, "pause")));
+  toast(`已暂停 ${running.length} 个任务`);
+  await refreshAll({ full: false });
+});
+el.resumeAllBtn.addEventListener("click", async () => {
+  el.resumeAllBtn.disabled = true;
+  const paused = state.jobs.filter((j) => ["created", "paused", "failed"].includes(derivedStatus(j)));
+  await Promise.allSettled(paused.map((j) => runJobAction(j.id, "resume")));
+  toast(`已恢复 ${paused.length} 个任务`);
+  await refreshAll({ full: false });
+});
 el.jobSearch.addEventListener("input", renderJobs);
 el.jobStatusFilter.addEventListener("change", renderJobs);
 el.targetPlatformChoices.addEventListener("change", updateTargetDropdownLabel);
@@ -735,22 +722,6 @@ el.recentFailures.addEventListener("click", async (event) => {
 });
 
 el.jobsTable.addEventListener("click", async (event) => {
-  const previewBtn = event.target.closest("[data-preview-job]");
-  if (previewBtn && !previewBtn.disabled) {
-    event.stopPropagation();
-    const jobId = previewBtn.dataset.previewJob;
-    const previewWindow = window.open("", "_blank");
-    try {
-      const result = await runJobAction(jobId, "preview");
-      if (previewWindow) previewWindow.location = result.studioUrl;
-      else if (result.studioUrl) window.open(result.studioUrl, "_blank");
-      toast("Remotion预览已开启");
-    } catch (err) {
-      if (previewWindow) previewWindow.close();
-      toast(err.message);
-    }
-    return;
-  }
   const row = event.target.closest("tr[data-job-id]");
   if (!row) return;
   state.selectedJobId = row.dataset.jobId;
@@ -763,19 +734,11 @@ el.jobDetail.addEventListener("click", async (event) => {
   const action = event.target.closest("[data-job-action]");
   if (!action) return;
   action.disabled = true;
-  const previewWindow = action.dataset.jobAction === "preview" ? window.open("", "_blank") : null;
   try {
-    const result = await runJobAction(action.dataset.jobId, action.dataset.jobAction);
-    if (action.dataset.jobAction === "preview") {
-      if (previewWindow) previewWindow.location = result.studioUrl;
-      else if (result.studioUrl) window.open(result.studioUrl, "_blank");
-      toast("Remotion预览已切换");
-    } else {
-      toast("已提交");
-    }
+    await runJobAction(action.dataset.jobId, action.dataset.jobAction);
+    toast("已提交");
     await refreshAll({ full: false });
   } catch (err) {
-    if (previewWindow) previewWindow.close();
     toast(err.message);
   } finally {
     action.disabled = false;
