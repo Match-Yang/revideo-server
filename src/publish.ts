@@ -368,6 +368,43 @@ async function publishBilibili(
       }
     }
 
+    // Handle 创作声明 dropdown — B站 now requires selecting a declaration
+    onProgress({ stage: "filling", percent: 52, message: "正在设置创作声明..." });
+    try {
+      const declarationSelected = await page.evaluate(() => {
+        // Find the 创作声明 select input
+        const selectInput = Array.from(document.querySelectorAll('.bcc-select-input-inner'))
+          .find(el => el.getAttribute('placeholder')?.includes('创作声明') && (el as HTMLElement).offsetHeight > 0) as HTMLElement | undefined;
+        if (!selectInput) return false;
+        // Check if already has a value selected
+        if (selectInput.getAttribute('readonly') === 'readonly' && selectInput.value && selectInput.value !== '请选择符合您视频内容的创作声明') {
+          return true;
+        }
+        // Click to open the dropdown
+        selectInput.click();
+        return 'clicked';
+      });
+      if (declarationSelected === 'clicked') {
+        await sleep(1000);
+        // Select the first option "内容无需标注"
+        await page.evaluate(() => {
+          const options = Array.from(document.querySelectorAll('.bcc-option'))
+            .filter(el => (el as HTMLElement).offsetHeight > 0);
+          if (options.length > 0) {
+            (options[0] as HTMLElement).click();
+          }
+        });
+        await sleep(500);
+        console.log('[Declaration] 创作声明 set to first option');
+      } else if (declarationSelected) {
+        console.log('[Declaration] Already set');
+      } else {
+        console.log('[Declaration] 创作声明 dropdown not found, skipping');
+      }
+    } catch (e) {
+      console.error('[Declaration] Failed to set 创作声明:', e);
+    }
+
     // Clear existing tags, then add new ones
     // B站 tag DOM: .tag-pre-wrp > .label-item-v2-container > svg.close.icon-sprite
     if (tags.length > 0) {
@@ -587,7 +624,7 @@ async function publishBilibili(
         if (bodyText.includes("等待视频上传完后会自动提交")) return "uploading" as const;
         if (bodyText.includes("视频上传中") || bodyText.includes("正在上传")) return "uploading" as const;
         // Detect error tips that block submission
-        const errorTips = ["至少填写一个标签", "请选择分区", "请填写标题", "请上传封面"];
+        const errorTips = ["至少填写一个标签", "请选择分区", "请填写标题", "请上传封面", "请选择创作声明"];
         for (const tip of errorTips) {
           if (bodyText.includes(tip)) return ("error:" + tip) as const;
         }
