@@ -323,12 +323,18 @@ function renderChanged() {
     renderTaskStats();
     if (state.page === "tasks") {
       renderJobs();
-      const hasRunning = state.jobs.some((j) => ["running", "publishing"].includes(derivedStatus(j)));
-      const hasPaused = state.jobs.some((j) => ["created", "paused", "failed"].includes(derivedStatus(j)));
-      el.pauseAllBtn.style.display = hasRunning ? "" : "none";
-      el.resumeAllBtn.style.display = hasPaused ? "" : "none";
     }
     state.rendered.jobs = nextJobs;
+  }
+  // Always update bulk action buttons when on tasks page
+  if (state.page === "tasks") {
+    const hasRunning = state.jobs.some((j) => ["running", "publishing"].includes(derivedStatus(j)));
+    const hasPaused = state.jobs.some((j) => ["created", "paused", "failed"].includes(derivedStatus(j)));
+    el.pauseAllBtn.style.display = hasRunning ? "" : "none";
+    el.resumeAllBtn.style.display = !hasRunning && hasPaused ? "" : "none";
+  } else {
+    el.pauseAllBtn.style.display = "none";
+    el.resumeAllBtn.style.display = "none";
   }
 
   const nextDetail = selectedJobSignature();
