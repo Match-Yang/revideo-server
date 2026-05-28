@@ -310,6 +310,7 @@ async function publishBilibili(
     // B站 tag DOM: .tag-pre-wrp > .label-item-v2-container > svg.close.icon-sprite
     if (tags.length > 0) {
       onProgress({ stage: "filling", percent: 55, message: "正在设置标签..." });
+      console.log(`[Tag] Starting to fill ${tags.length} tags: ${JSON.stringify(tags)}`);
 
       // Remove existing tags one by one (clicking all at once causes missed clicks)
       for (;;) {
@@ -330,25 +331,36 @@ async function publishBilibili(
         return Array.from(document.querySelectorAll('input.input-val[placeholder*="创建标签"]'))
           .find(el => (el as HTMLElement).offsetHeight > 0) || null;
       });
+      console.log(`[Tag] tagInput found: ${!!(tagInput && tagInput.asElement())}`);
+
       if (tagInput && tagInput.asElement()) {
         const inputEl = tagInput.asElement()!;
         for (const tag of tags) {
-          await inputEl.click();
-          await page.evaluate(
-            (el: HTMLInputElement, val: string) => {
-              const setter = Object.getOwnPropertyDescriptor(
-                HTMLInputElement.prototype,
-                "value"
-              )?.set;
-              setter?.call(el, val);
-              el.dispatchEvent(new Event("input", { bubbles: true }));
-            },
-            inputEl,
-            tag
-          );
-          await page.keyboard.press("Enter");
-          await sleep(300);
+          // Use execCommand('insertText') to set value (fires proper InputEvent for Vue)
+          // and JS dispatchEvent for Enter (doesn't depend on Puppeteer keyboard focus).
+          await page.evaluate((el: HTMLInputElement, val: string) => {
+            el.focus();
+            el.value = '';
+            document.execCommand('selectAll', false, undefined);
+            document.execCommand('insertText', false, val);
+            el.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
+            }));
+            el.dispatchEvent(new KeyboardEvent('keyup', {
+              key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
+            }));
+          }, inputEl, tag);
+          await sleep(500);
+
+          // Verify tag was created (check outside evaluate so Vue has processed)
+          const verify = await page.evaluate(() => {
+            const items = document.querySelectorAll('.tag-pre-wrp .label-item-v2-container');
+            return Array.from(items).map((t: Element) => t.textContent!.trim());
+          });
+          console.log(`[Tag] Added "${tag}", current tags: ${JSON.stringify(verify)}`);
         }
+      } else {
+        console.log('[Tag] WARNING: Tag input not found, skipping tag fill');
       }
     }
 
@@ -562,6 +574,11 @@ async function publishBilibili(
         if (bodyText.includes("稿件投递成功")) return "success" as const;
         if (bodyText.includes("等待视频上传完后会自动提交")) return "uploading" as const;
         if (bodyText.includes("视频上传中") || bodyText.includes("正在上传")) return "uploading" as const;
+        // Detect error tips that block submission
+        const errorTips = ["至少填写一个标签", "请选择分区", "请填写标题", "请上传封面"];
+        for (const tip of errorTips) {
+          if (bodyText.includes(tip)) return ("error:" + tip) as const;
+        }
         return "unknown" as const;
       });
 
@@ -571,6 +588,12 @@ async function publishBilibili(
       if (state === "success") {
         console.log(`[Submit] 稿件投递成功 after ${elapsed}s`);
         break;
+      }
+
+      if (state.startsWith("error:")) {
+        const errorMsg = state.slice(6);
+        console.error(`[Submit] B站投稿失败: ${errorMsg}`);
+        throw new Error(`B站投稿失败: ${errorMsg}`);
       }
 
       if (state === "uploading") {

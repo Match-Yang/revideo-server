@@ -402,6 +402,25 @@ function recoverInterruptedJobRuns(): void {
         message: "Recovered interrupted running step after server restart",
       });
     }
+
+    // Re-queue jobs stuck at a non-terminal step (e.g. probing-source with pending status)
+    // after a server restart wiped the in-memory queue.
+    const nonTerminalSteps = ["created", "probing-source", "downloading", "normalizing",
+      "translating", "generating-cover", "rendering-video", "generating-drafts", "preflight-publish", "publishing-targets"];
+    if (nonTerminalSteps.includes(step) && step !== "completed" && step !== "cancelled" && step !== "failed") {
+      const stepStatus = job.workflow.steps[step]?.status;
+      if (stepStatus !== "running" && stepStatus !== "paused") {
+        const steps = runStepsFromJobStep(step, stepStatus);
+        enqueueJobRun(job.id, { steps });
+        appendJobEvent({
+          jobId: job.id,
+          level: "info",
+          step,
+          message: "Re-queued job after server restart",
+          data: { step, stepStatus, requeuedSteps: steps },
+        });
+      }
+    }
   }
 }
 

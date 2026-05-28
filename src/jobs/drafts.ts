@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { translateJSON } from "../translate/openai-compatible";
+import { loadSettings } from "../settings";
 import type { JobTarget, RevideoJob, TargetPlatform } from "./types";
 
 function sourceTitle(job: RevideoJob): string {
@@ -57,9 +58,11 @@ async function generateBilibiliDraft(job: RevideoJob): Promise<Record<string, un
   const title = sourceTitle(job);
   const sourceDesc = sourceDescription(job);
   const targetLanguage = job.options.targetLanguage || "zh-CN";
+  const settings = loadSettings();
+  const settingsCategory = settings.publishing?.platformConfigs?.bilibili?.category;
 
   if (!/^zh/i.test(targetLanguage)) {
-    return { title, description: sourceDesc, tags: ["转载", "海外视频"], category: "生活兴趣" };
+    return { title, description: sourceDesc, tags: ["转载", "海外视频"], category: settingsCategory || "生活兴趣" };
   }
 
   let draft: BilibiliDraft;
@@ -73,7 +76,7 @@ async function generateBilibiliDraft(job: RevideoJob): Promise<Record<string, un
       title,
       description: "",
       tags: ["转载", "海外视频"],
-      category: "生活兴趣",
+      category: settingsCategory || "生活兴趣",
     };
   }
 
@@ -86,7 +89,7 @@ async function generateBilibiliDraft(job: RevideoJob): Promise<Record<string, un
     title: cleanDraftTitle.slice(0, 80),
     description,
     tags: Array.isArray(draft.tags) ? draft.tags.slice(0, 5) : ["转载", "海外视频"],
-    category: draft.category || "生活兴趣",
+    category: settingsCategory || draft.category || "生活兴趣",
   };
 }
 
