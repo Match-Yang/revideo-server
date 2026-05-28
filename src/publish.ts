@@ -306,67 +306,9 @@ async function publishBilibili(
       );
     }
 
-    // Clear existing tags, then add new ones
-    // B站 tag DOM: .tag-pre-wrp > .label-item-v2-container > svg.close.icon-sprite
-    if (tags.length > 0) {
-      onProgress({ stage: "filling", percent: 55, message: "正在设置标签..." });
-      console.log(`[Tag] Starting to fill ${tags.length} tags: ${JSON.stringify(tags)}`);
-
-      // Remove existing tags one by one (clicking all at once causes missed clicks)
-      for (;;) {
-        const removed = await page.evaluate(() => {
-          const item = Array.from(document.querySelectorAll('.tag-pre-wrp .label-item-v2-container'))
-            .find(el => (el as HTMLElement).offsetHeight > 0);
-          if (!item) return false;
-          const closeBtn = item.querySelector('svg.close');
-          if (closeBtn) closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-          return true;
-        });
-        if (!removed) break;
-        await sleep(200);
-      }
-
-      // Find the visible tag input
-      const tagInput = await page.evaluateHandle(() => {
-        return Array.from(document.querySelectorAll('input.input-val[placeholder*="创建标签"]'))
-          .find(el => (el as HTMLElement).offsetHeight > 0) || null;
-      });
-      console.log(`[Tag] tagInput found: ${!!(tagInput && tagInput.asElement())}`);
-
-      if (tagInput && tagInput.asElement()) {
-        const inputEl = tagInput.asElement()!;
-        for (const tag of tags) {
-          // Use execCommand('insertText') to set value (fires proper InputEvent for Vue)
-          // and JS dispatchEvent for Enter (doesn't depend on Puppeteer keyboard focus).
-          await page.evaluate((el: HTMLInputElement, val: string) => {
-            el.focus();
-            el.value = '';
-            document.execCommand('selectAll', false, undefined);
-            document.execCommand('insertText', false, val);
-            el.dispatchEvent(new KeyboardEvent('keydown', {
-              key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
-            }));
-            el.dispatchEvent(new KeyboardEvent('keyup', {
-              key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
-            }));
-          }, inputEl, tag);
-          await sleep(500);
-
-          // Verify tag was created (check outside evaluate so Vue has processed)
-          const verify = await page.evaluate(() => {
-            const items = document.querySelectorAll('.tag-pre-wrp .label-item-v2-container');
-            return Array.from(items).map((t: Element) => t.textContent!.trim());
-          });
-          console.log(`[Tag] Added "${tag}", current tags: ${JSON.stringify(verify)}`);
-        }
-      } else {
-        console.log('[Tag] WARNING: Tag input not found, skipping tag fill');
-      }
-    }
-
-    // Select category (分区)
+    // Select category (分区) — must come before tags & topics, as it determines recommendations
     if (options.category) {
-      onProgress({ stage: "filling", percent: 52, message: `正在设置分区: ${options.category}...` });
+      onProgress({ stage: "filling", percent: 50, message: `正在设置分区: ${options.category}...` });
       try {
         let currentCategory = await getCurrentBilibiliCategory(page);
         if (currentCategory.includes(options.category)) {
@@ -424,6 +366,76 @@ async function publishBilibili(
       } catch (e) {
         console.error('[Category] Failed to set category:', e);
       }
+    }
+
+    // Clear existing tags, then add new ones
+    // B站 tag DOM: .tag-pre-wrp > .label-item-v2-container > svg.close.icon-sprite
+    if (tags.length > 0) {
+      onProgress({ stage: "filling", percent: 55, message: "正在设置标签..." });
+      console.log(`[Tag] Starting to fill ${tags.length} tags: ${JSON.stringify(tags)}`);
+
+      // Remove existing tags one by one (clicking all at once causes missed clicks)
+      for (;;) {
+        const removed = await page.evaluate(() => {
+          const item = Array.from(document.querySelectorAll('.tag-pre-wrp .label-item-v2-container'))
+            .find(el => (el as HTMLElement).offsetHeight > 0);
+          if (!item) return false;
+          const closeBtn = item.querySelector('svg.close');
+          if (closeBtn) closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          return true;
+        });
+        if (!removed) break;
+        await sleep(200);
+      }
+
+      // Find the visible tag input
+      const tagInput = await page.evaluateHandle(() => {
+        return Array.from(document.querySelectorAll('input.input-val[placeholder*="创建标签"]'))
+          .find(el => (el as HTMLElement).offsetHeight > 0) || null;
+      });
+      console.log(`[Tag] tagInput found: ${!!(tagInput && tagInput.asElement())}`);
+
+      if (tagInput && tagInput.asElement()) {
+        const inputEl = tagInput.asElement()!;
+        for (const tag of tags) {
+          await page.evaluate((el: HTMLInputElement, val: string) => {
+            el.focus();
+            el.value = '';
+            document.execCommand('selectAll', false, undefined);
+            document.execCommand('insertText', false, val);
+            el.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
+            }));
+            el.dispatchEvent(new KeyboardEvent('keyup', {
+              key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
+            }));
+          }, inputEl, tag);
+          await sleep(500);
+
+          const verify = await page.evaluate(() => {
+            const items = document.querySelectorAll('.tag-pre-wrp .label-item-v2-container');
+            return Array.from(items).map((t: Element) => t.textContent!.trim());
+          });
+          console.log(`[Tag] Added "${tag}", current tags: ${JSON.stringify(verify)}`);
+        }
+      } else {
+        console.log('[Tag] WARNING: Tag input not found, skipping tag fill');
+      }
+    }
+
+    // Select the first recommended topic
+    try {
+      const topicSelected = await page.evaluate(() => {
+        const items = document.querySelectorAll('.tag-topic-list .hot-tag-container');
+        if (items.length === 0) return false;
+        const alreadySelected = Array.from(items).some(el => el.classList.contains('hot-tag-container-selected'));
+        if (alreadySelected) return true;
+        (items[0] as HTMLElement).click();
+        return true;
+      });
+      if (topicSelected) console.log('[Topic] Selected first recommended topic');
+    } catch (e) {
+      console.log('[Topic] Could not select topic:', (e as Error).message);
     }
 
     // Upload cover image (required by Bilibili)

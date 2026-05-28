@@ -42,27 +42,35 @@ const BILIBILI_PROMPT = [
   `{`,
   `  "title": "极具吸引力的 B 站风格中文标题，不超过80字",`,
   `  "description": "简短有吸引力的视频简介，1-3句话，抛出有对立性的问题引导观众讨论",`,
-  `  "tags": ["标签1", "标签2", "标签3", "标签4", "标签5"],`,
+  `  "tags": ["标签1", "标签2", "标签3", "标签4", "标签5", "标签6", "标签7", "标签8", "标签9"],`,
   `  "category": "最匹配的 B 站视频分区名称"`,
   `}`,
   "",
   "要求：",
   "- 标题要接地气、有网感，能引起好奇心（如：外国网友：喂！你的购置税在你前面跑啊！）",
   "- 简介要抛出有争议或对立性的问题，激发评论区讨论",
-  "- tags 共 5 个，与标题和简介内容高度相关",
+  "- tags 共 9 个，与标题和简介内容高度相关",
   "- category 必须是以下分区之一：影视、娱乐、音乐、舞蹈、动画、绘画、鬼畜、游戏、资讯、知识、人工智能、科技数码、汽车、时尚美妆、家装房产、户外潮流、健身、体育运动、手工、美食、小剧场、旅游出行、三农、动物、亲子、健康、情感、vlog、生活兴趣、生活经验",
   "- 只输出 JSON，不要输出其他内容",
 ].join("\n");
 
-async function generateBilibiliDraft(job: RevideoJob): Promise<Record<string, unknown>> {
+async function generateBilibiliDraft(
+  job: RevideoJob,
+): Promise<Record<string, unknown>> {
   const title = sourceTitle(job);
   const sourceDesc = sourceDescription(job);
   const targetLanguage = job.options.targetLanguage || "zh-CN";
   const settings = loadSettings();
-  const settingsCategory = settings.publishing?.platformConfigs?.bilibili?.category;
+  const settingsCategory =
+    settings.publishing?.platformConfigs?.bilibili?.category;
 
   if (!/^zh/i.test(targetLanguage)) {
-    return { title, description: sourceDesc, tags: ["转载", "海外视频"], category: settingsCategory || "生活兴趣" };
+    return {
+      title,
+      description: sourceDesc,
+      tags: ["外网评论", "海外视频"],
+      category: settingsCategory || "生活兴趣",
+    };
   }
 
   let draft: BilibiliDraft;
@@ -88,12 +96,17 @@ async function generateBilibiliDraft(job: RevideoJob): Promise<Record<string, un
   return {
     title: cleanDraftTitle.slice(0, 80),
     description,
-    tags: Array.isArray(draft.tags) ? draft.tags.slice(0, 5) : ["转载", "海外视频"],
+    tags: Array.isArray(draft.tags)
+      ? draft.tags.slice(0, 9)
+      : ["转载", "海外视频"],
     category: settingsCategory || draft.category || "生活兴趣",
   };
 }
 
-export async function generateDraftForPlatform(job: RevideoJob, platform: TargetPlatform): Promise<Record<string, unknown>> {
+export async function generateDraftForPlatform(
+  job: RevideoJob,
+  platform: TargetPlatform,
+): Promise<Record<string, unknown>> {
   if (platform === "bilibili") {
     return generateBilibiliDraft(job);
   }
@@ -123,7 +136,7 @@ export async function generateDrafts(job: RevideoJob): Promise<JobTarget[]> {
     const draft = await generateDraftForPlatform(job, target.platform);
     fs.writeFileSync(
       path.join(copyDir, `${target.platform}.json`),
-      JSON.stringify(draft, null, 2)
+      JSON.stringify(draft, null, 2),
     );
     const next: JobTarget = {
       ...target,
