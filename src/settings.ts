@@ -12,12 +12,11 @@ export interface RevideoSettings {
   production: {
     subtitleTargetLanguage: string;
     subtitleRetranslateTargetLanguage: boolean;
-    subtitlePositivePrompt: string;
-    subtitleNegativePrompt: string;
+    subtitlePrompt: string;
+    bilingualSubtitles: boolean;
     commentTargetLanguage: string;
     commentRetranslateTargetLanguage: boolean;
-    commentPositivePrompt: string;
-    commentNegativePrompt: string;
+    commentPrompt: string;
   };
   publishing: {
     defaultPlatforms: TargetPlatform[];
@@ -52,12 +51,11 @@ export const defaultSettings: RevideoSettings = {
   production: {
     subtitleTargetLanguage: "zh-CN",
     subtitleRetranslateTargetLanguage: false,
-    subtitlePositivePrompt: "保持字幕简洁自然，符合中文视频口语表达，保留必要专有名词。",
-    subtitleNegativePrompt: "删除或改写政治煽动、违法、色情、暴力、仇恨、诈骗、辱骂、平台高风险内容；宁可误杀，不要放过。",
+    subtitlePrompt: "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。",
+    bilingualSubtitles: false,
     commentTargetLanguage: "zh-CN",
     commentRetranslateTargetLanguage: false,
-    commentPositivePrompt: "将非中文评论翻译为自然中文；中文评论保持原文；保留用户语气但不要美化危险内容。",
-    commentNegativePrompt: "过滤政治敏感、违法交易、色情低俗、仇恨辱骂、诈骗引流、极端主义、平台容易下架的内容；对模糊风险内容按不通过处理。",
+    commentPrompt: "将非中文评论翻译为自然中文；中文评论保持原文；保留用户语气但不要美化危险内容。",
   },
   publishing: {
     defaultPlatforms: ["bilibili"],

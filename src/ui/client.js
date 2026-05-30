@@ -531,7 +531,9 @@ function stepDetail(job, events, step) {
     return `<dl class="detail-dl"><dt>素材目录</dt><dd class="break-all">${escapeHtml(job.artifacts?.sourceDir || "-")}</dd><dt>下载质量</dt><dd>${escapeHtml(job.options?.downloadQuality || "auto")}</dd><dt>目标评论</dt><dd>${job.options?.targetCommentCount ?? "-"}</dd></dl>`;
   }
   if (step === "translating-assets" || step === "moderating-assets") {
-    return `<dl class="detail-dl"><dt>字幕输入/拦截</dt><dd>${subtitles.inputCount ?? 0} / ${subtitles.droppedCount ?? 0}</dd><dt>评论输入/拦截</dt><dd>${comments.inputCount ?? 0} / ${comments.droppedCount ?? 0}</dd><dt>评论报告</dt><dd class="break-all">${escapeHtml(comments.reportPath || "-")}</dd></dl>`;
+    const subtitleReportId = `subtitle-report-${job.id}`;
+    const subtitleReportHtml = (subtitles.failedCount > 0) ? `<dt>字幕报告</dt><dd><a href="#" id="${subtitleReportId}" class="break-all">${escapeHtml(subtitles.reportPath || "-")}</a></dd>` : "";
+    return `<dl class="detail-dl"><dt>字幕翻译</dt><dd>输入 ${subtitles.inputCount ?? 0} 条 / 成功 ${subtitles.translatedCount ?? subtitles.inputCount - (subtitles.droppedCount ?? 0)} 条 / 失败 ${subtitles.failedCount ?? subtitles.droppedCount ?? 0} 条</dd>${subtitleReportHtml}<dt>评论翻译</dt><dd>输入 ${comments.inputCount ?? 0} / 拦截 ${comments.droppedCount ?? 0}</dd><dt>评论报告</dt><dd class="break-all">${escapeHtml(comments.reportPath || "-")}</dd></dl>`;
   }
   if (step === "rendering-video") {
     return `<dl class="detail-dl"><dt>重复次数</dt><dd>${job.options?.repeatTimes || 1}</dd><dt>使用素材</dt><dd class="break-all">${escapeHtml(job.artifacts?.sourceDir || "-")}</dd><dt>输出文件</dt><dd class="break-all">${escapeHtml(job.artifacts?.outputVideo || "-")}</dd></dl>`;
@@ -603,6 +605,23 @@ async function renderJobDetail() {
       }).join("")}
     </div>
   `;
+
+  const subtitleReportLink = document.getElementById(`subtitle-report-${job.id}`);
+  if (subtitleReportLink) {
+    subtitleReportLink.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const reportPath = job.source?.metadata?.translation?.subtitles?.reportPath;
+      if (!reportPath) return;
+      try {
+        const report = await jsonFetch(`/api/jobs/${encodeURIComponent(job.id)}/artifact?path=${encodeURIComponent(reportPath)}`);
+        const items = report.items || [];
+        const detail = items.map((item) =>
+          `${item.id}  ${item.timestampRange}\n原文: ${item.originalText}\n原因: ${item.reason} - ${item.detail}`
+        ).join("\n\n");
+        alert(`字幕翻译失败报告 (${report.failedCount}/${report.inputCount})\n\n${detail}`);
+      } catch {}
+    });
+  }
 }
 
 function renderSettings() {
@@ -616,10 +635,12 @@ function renderSettings() {
     state.settings.production?.subtitleTargetLanguage || state.settings.production?.commentTargetLanguage || "zh-CN";
   el.settingsForm.elements["translation.retranslateTargetLanguage"].value =
     String(Boolean(state.settings.production?.subtitleRetranslateTargetLanguage || state.settings.production?.commentRetranslateTargetLanguage));
-  el.settingsForm.elements["translation.positivePrompt"].value =
-    state.settings.production?.commentPositivePrompt || state.settings.production?.subtitlePositivePrompt || "";
-  el.settingsForm.elements["translation.negativePrompt"].value =
-    state.settings.production?.commentNegativePrompt || state.settings.production?.subtitleNegativePrompt || "";
+  el.settingsForm.elements["translation.bilingualSubtitles"].value =
+    String(Boolean(state.settings.production?.bilingualSubtitles));
+  el.settingsForm.elements["translation.subtitlePrompt"].value =
+    state.settings.production?.subtitlePrompt || "";
+  el.settingsForm.elements["translation.commentPrompt"].value =
+    state.settings.production?.commentPrompt || "";
 
   const defaults = state.settings.publishing?.defaultPlatforms || [];
   el.defaultPlatformSettings.innerHTML = platforms.map((platform) => `
@@ -662,17 +683,17 @@ function collectSettings() {
 
   const targetLanguage = el.settingsForm.elements["translation.targetLanguage"].value || "zh-CN";
   const retranslate = el.settingsForm.elements["translation.retranslateTargetLanguage"].value === "true";
-  const positivePrompt = el.settingsForm.elements["translation.positivePrompt"].value || "";
-  const negativePrompt = el.settingsForm.elements["translation.negativePrompt"].value || "";
+  const bilingual = el.settingsForm.elements["translation.bilingualSubtitles"].value === "true";
+  const subtitlePrompt = el.settingsForm.elements["translation.subtitlePrompt"].value || "";
+  const commentPrompt = el.settingsForm.elements["translation.commentPrompt"].value || "";
   next.production ||= {};
   next.production.subtitleTargetLanguage = targetLanguage;
   next.production.commentTargetLanguage = targetLanguage;
   next.production.subtitleRetranslateTargetLanguage = retranslate;
   next.production.commentRetranslateTargetLanguage = retranslate;
-  next.production.subtitlePositivePrompt = positivePrompt;
-  next.production.commentPositivePrompt = positivePrompt;
-  next.production.subtitleNegativePrompt = negativePrompt;
-  next.production.commentNegativePrompt = negativePrompt;
+  next.production.bilingualSubtitles = bilingual;
+  next.production.subtitlePrompt = subtitlePrompt;
+  next.production.commentPrompt = commentPrompt;
   return next;
 }
 

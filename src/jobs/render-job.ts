@@ -3,6 +3,7 @@ import path from "path";
 import type { DirInfo } from "../types";
 import { render, type RenderProgress } from "../renderer";
 import type { RevideoJob } from "./types";
+import type { RevideoSettings } from "../settings";
 
 export interface JobRenderResult {
   outputPath: string;
@@ -10,7 +11,11 @@ export interface JobRenderResult {
   durationSec: number;
 }
 
-function pickSubtitle(subtitlePaths: string[]): string[] {
+function pickSubtitle(subtitlePaths: string[], bilingual?: boolean): string[] {
+  if (bilingual) {
+    const bi = subtitlePaths.find((file) => path.basename(file).includes(".bilingual."));
+    if (bi) return [bi];
+  }
   const zh = subtitlePaths.find((file) => /zh|cn|chinese/i.test(path.basename(file)));
   return zh ? [zh] : subtitlePaths.slice(0, 1);
 }
@@ -35,6 +40,9 @@ export function buildJobDirInfo(job: RevideoJob): DirInfo {
     throw new Error("Job does not have a normalized mediaPath");
   }
 
+  const settings = (job.settingsSnapshot || {}) as Partial<RevideoSettings>;
+  const bilingual = settings.production?.bilingualSubtitles ?? false;
+
   return {
     name: job.id,
     path: job.artifacts.rootDir,
@@ -49,7 +57,8 @@ export function buildJobDirInfo(job: RevideoJob): DirInfo {
     subtitleFiles: pickSubtitle(
       translation?.subtitles?.outputPaths?.length
         ? translation.subtitles.outputPaths
-        : normalized?.subtitlePaths || []
+        : normalized?.subtitlePaths || [],
+      bilingual,
     ),
     repeatTimes: job.options.repeatTimes,
   };

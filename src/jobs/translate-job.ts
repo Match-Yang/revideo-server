@@ -1,7 +1,15 @@
 import fs from "fs";
 import path from "path";
 import type { RevideoJob } from "./types";
-import { findLocalSensitiveReason, translateBatchWithSafetyReview, type SafetyReviewInput } from "./moderation";
+import type { RevideoSettings } from "../settings";
+import {
+  findLocalSensitiveReason,
+  translateBatchWithSafetyReview,
+  translateSubtitleBatchWithContext,
+  subtitleContextAwarePrompt,
+  SENSITIVE_PLACEHOLDER,
+  type SafetyReviewInput,
+} from "./moderation";
 
 interface CommentLike {
   text?: string;
@@ -20,7 +28,8 @@ export interface JobTranslationResult {
   subtitles: {
     status: "translated" | "skipped";
     inputCount: number;
-    droppedCount: number;
+    translatedCount: number;
+    failedCount: number;
     outputPaths: string[];
     reportPath?: string;
   };
@@ -33,6 +42,16 @@ interface DroppedItemReport {
   text: string;
   author?: string;
   authorId?: string;
+}
+
+interface SubtitleFailedItemReport {
+  id: string;
+  start: number;
+  end: number;
+  timestampRange: string;
+  originalText: string;
+  reason: string;
+  detail: string;
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -310,6 +329,105 @@ function reduceRollingSubtitleCues(cues: SubtitleCue[]): SubtitleCue[] {
   return reduced.length ? reduced : cues;
 }
 
+interface MergedSegment {
+  id: string;
+  text: string;
+  cueIndices: number[];
+}
+
+function endsSentence(text: string): boolean {
+  return /[.!?]["'")\]]*\s*$/.test(text.trim());
+}
+
+function mergeConsecutiveCues(cues: SubtitleCue[]): MergedSegment[] {
+  const segments: MergedSegment[] = [];
+  let groupTexts: string[] = [];
+  let groupIndices: number[] = [];
+
+  const flush = () => {
+    if (groupIndices.length === 0) return;
+    const text = groupTexts.join(" ");
+    segments.push({
+      id: `seg-${segments.length}`,
+      text,
+      cueIndices: [...groupIndices],
+    });
+    groupTexts = [];
+    groupIndices = [];
+  };
+
+  for (let i = 0; i < cues.length; i++) {
+    groupTexts.push(cues[i].text);
+    groupIndices.push(i);
+    if (endsSentence(cues[i].text)) {
+      flush();
+    }
+  }
+  flush();
+
+  return segments;
+}
+
+function splitTranslationToCues(
+  segments: MergedSegment[],
+  translations: Map<string, string>,
+  cues: SubtitleCue[],
+): Map<string, string> {
+  const result = new Map<string, string>();
+
+  for (const seg of segments) {
+    const translation = translations.get(seg.id);
+    if (!translation) {
+      for (const idx of seg.cueIndices) {
+        result.set(cues[idx].id, cues[idx].text);
+      }
+      continue;
+    }
+
+    if (seg.cueIndices.length === 1) {
+      result.set(cues[seg.cueIndices[0]].id, translation);
+      continue;
+    }
+
+    // Split translation proportionally by original word count
+    const origWords = seg.cueIndices.map(idx => cues[idx].text.split(/\s+/).filter(Boolean));
+    const totalWords = origWords.reduce((sum, w) => sum + w.length, 0);
+    const transChars = translation.length;
+    const cueTranslations: string[] = [];
+
+    const stripLeadingPunctuation = (s: string) => s.replace(/^[，。、；：！？,.!?;:\s]+/, "");
+    let usedChars = 0;
+    for (let j = 0; j < origWords.length; j++) {
+      const share = totalWords > 0 ? origWords[j].length / totalWords : 1 / origWords.length;
+      if (j === origWords.length - 1) {
+        cueTranslations.push(stripLeadingPunctuation(translation.slice(usedChars)).trimEnd());
+      } else {
+        const cut = Math.round(transChars * share) + usedChars;
+        // Try to cut at a natural boundary
+        let cutPoint = cut;
+        for (let k = Math.min(cut + 5, translation.length); k >= Math.max(cut - 5, usedChars); k--) {
+          if (translation[k] === " " || translation[k] === "，" || translation[k] === "。" ||
+              translation[k] === "、" || translation[k] === "；" || translation[k] === "！" ||
+              translation[k] === "？" || translation[k] === "：" ||
+              translation[k] === "," || translation[k] === "." || translation[k] === "!" ||
+              translation[k] === "?" || translation[k] === ";") {
+            cutPoint = k + 1;
+            break;
+          }
+        }
+        cueTranslations.push(stripLeadingPunctuation(translation.slice(usedChars, cutPoint)).trimEnd());
+        usedChars = cutPoint;
+      }
+    }
+
+    for (let j = 0; j < seg.cueIndices.length; j++) {
+      result.set(cues[seg.cueIndices[j]].id, cueTranslations[j] || cues[seg.cueIndices[j]].text);
+    }
+  }
+
+  return result;
+}
+
 function parseSubtitleCues(content: string): SubtitleCue[] {
   const blocks = content
     .split(/\n\s*\n/g)
@@ -346,70 +464,143 @@ function sanitizeTranslatedSubtitleText(value: string): string {
     .replace(/\bWEBVTT\b/gi, "")
     .replace(/^[（(]?\s*(注|说明|备注)[:：].*$/g, "")
     .replace(/原句未完整.*$/g, "")
+    .replace(/^[，。、；：！？,.!?;:\s]+/, "")
     .trim();
+}
+
+function buildFullSubtitleContext(cues: SubtitleCue[]): string {
+  return cues.map((c, i) => `${i + 1} ${c.text}`).join("\n");
 }
 
 async function translateSubtitleFile(
   sourcePath: string,
-  targetPath: string,
+  targetDir: string,
   targetLanguage: string,
-  context: string
-): Promise<{ inputCount: number; droppedCount: number; dropped: DroppedItemReport[] }> {
+  context: string,
+  userPrompt: string,
+): Promise<{
+  inputCount: number;
+  translatedCount: number;
+  failedCount: number;
+  failedItems: SubtitleFailedItemReport[];
+  outputPaths: string[];
+}> {
   const content = fs.readFileSync(sourcePath, "utf-8").replace(/\r\n/g, "\n");
   const cues = parseSubtitleCues(content);
   const batchSize = Number(process.env.TRANSLATE_SUBTITLE_BATCH_SIZE || 100);
-  let droppedCount = 0;
-  const dropped: DroppedItemReport[] = [];
-  const translatedById = new Map<string, string>();
 
-  const inputs: SafetyReviewInput[] = cues.map((cue) => ({ id: cue.id, text: cue.text }));
-  const cueById = new Map(cues.map((cue) => [cue.id, cue]));
+  // Merge consecutive non-sentence-ending fragments into complete segments
+  const segments = mergeConsecutiveCues(cues);
+  const segById = new Map(segments.map((seg) => [seg.id, seg]));
+
+  const fullSubtitleText = buildFullSubtitleContext(cues);
+  const systemPrompt = subtitleContextAwarePrompt(targetLanguage, context, fullSubtitleText, userPrompt);
+
+  const inputs: SafetyReviewInput[] = segments.map((seg) => ({ id: seg.id, text: seg.text }));
+  const translatedSegById = new Map<string, string>();
+  const failedSegments = new Set<string>();
+  const failedItems: SubtitleFailedItemReport[] = [];
+  let translatedCount = 0;
+  let failedCount = 0;
 
   const batches = chunk(inputs, batchSize);
   const concurrency = Math.min(10, Math.max(1, Number(process.env.TRANSLATE_SUBTITLE_CONCURRENCY || 10)));
-  const batchResults = await mapConcurrent(batches, concurrency, (batch) =>
-    translateBatchWithSafetyReview(batch, targetLanguage, "subtitle", context)
-  );
 
-  for (const results of batchResults) {
-    for (const result of results) {
-      const cue = cueById.get(result.id);
-      if (!cue) throw new Error(`Translated subtitle cue id not found: ${result.id}`);
-      const replacement =
-        result.action === "drop"
-          ? ""
-          : hasChinese(cue.text)
-            ? cue.text
-            : sanitizeTranslatedSubtitleText(result.translation || "");
-      const missingTargetLanguage =
-        result.action !== "drop" &&
-        expectsChinese(targetLanguage) &&
-        !hasChinese(cue.text) &&
-        !isNonSemanticText(cue.text) &&
-        !hasChinese(replacement);
-      if (result.action === "drop" || missingTargetLanguage) {
-        droppedCount++;
-        dropped.push({
-          id: result.id,
-          kind: "subtitle",
-          reason: missingTargetLanguage ? "missing-target-language" : result.reason || "model",
-          text: cue.text,
-        });
-      }
-      translatedById.set(result.id, missingTargetLanguage ? "" : replacement);
+  // Cache warmup: first batch completes, wait 3s for cache persistence, then remaining batches concurrent
+  const batchResults: Awaited<ReturnType<typeof translateSubtitleBatchWithContext>>[] = [];
+
+  if (batches.length > 0) {
+    batchResults.push(await translateSubtitleBatchWithContext(batches[0], targetLanguage, systemPrompt));
+
+    if (batches.length > 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const remainingResults = await mapConcurrent(batches.slice(1), concurrency, (batch) =>
+        translateSubtitleBatchWithContext(batch, targetLanguage, systemPrompt),
+      );
+      batchResults.push(...remainingResults);
     }
   }
 
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  const blocks = cues
+  for (const results of batchResults) {
+    for (const result of results) {
+      const seg = segById.get(result.id);
+      if (!seg) throw new Error(`Translated segment id not found: ${result.id}`);
+
+      if (result.action === "sensitive" || result.translation === SENSITIVE_PLACEHOLDER) {
+        failedCount += seg.cueIndices.length;
+        failedSegments.add(seg.id);
+        for (const idx of seg.cueIndices) {
+          const cue = cues[idx];
+          failedItems.push({
+            id: cue.id,
+            start: cue.start,
+            end: cue.end,
+            timestampRange: `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}`,
+            originalText: cue.text,
+            reason: result.reason?.startsWith("translated-") ? "sensitive-local" : "sensitive",
+            detail: result.reason || "model",
+          });
+        }
+        continue;
+      }
+
+      const translation = sanitizeTranslatedSubtitleText(result.translation || "");
+      const postScanReason = findLocalSensitiveReason(translation);
+      if (postScanReason) {
+        failedCount += seg.cueIndices.length;
+        failedSegments.add(seg.id);
+        for (const idx of seg.cueIndices) {
+          const cue = cues[idx];
+          failedItems.push({
+            id: cue.id,
+            start: cue.start,
+            end: cue.end,
+            timestampRange: `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}`,
+            originalText: cue.text,
+            reason: "sensitive-local",
+            detail: `translated-${postScanReason}`,
+          });
+        }
+        continue;
+      }
+
+      translatedSegById.set(seg.id, translation || seg.text);
+      translatedCount += seg.cueIndices.length;
+    }
+  }
+
+  // Split segment translations back to individual cues
+  const translatedById = splitTranslationToCues(segments, translatedSegById, cues);
+
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  // Pure translation VTT
+  const ext = path.extname(sourcePath) || ".vtt";
+  const purePath = path.join(targetDir, `translated.${targetLanguage}${ext}`);
+  const pureBlocks = cues
     .map((cue) => {
-      const text = translatedById.get(cue.id) || "";
-      if (!text) return "";
+      const text = translatedById.get(cue.id) || cue.text;
       return `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}\n${text}`;
-    })
-    .filter(Boolean);
-  fs.writeFileSync(targetPath, `WEBVTT\nKind: captions\nLanguage: ${targetLanguage}\n\n${blocks.join("\n\n")}\n`);
-  return { inputCount: cues.length, droppedCount, dropped };
+    });
+  fs.writeFileSync(purePath, `WEBVTT\nKind: captions\nLanguage: ${targetLanguage}\n\n${pureBlocks.join("\n\n")}\n`);
+
+  // Bilingual VTT
+  const bilingualPath = path.join(targetDir, `translated.${targetLanguage}.bilingual${ext}`);
+  const bilingualBlocks = cues
+    .map((cue) => {
+      const text = translatedById.get(cue.id) || cue.text;
+      return `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}\n${text}\n${cue.text}`;
+    });
+  fs.writeFileSync(bilingualPath, `WEBVTT\nKind: captions\nLanguage: ${targetLanguage}\n\n${bilingualBlocks.join("\n\n")}\n`);
+
+  return {
+    inputCount: cues.length,
+    translatedCount,
+    failedCount,
+    failedItems,
+    outputPaths: [purePath, bilingualPath],
+  };
 }
 
 export async function translateSubtitles(job: RevideoJob, targetLanguage: string) {
@@ -418,35 +609,55 @@ export async function translateSubtitles(job: RevideoJob, targetLanguage: string
     | undefined;
   const subtitlePaths = normalized?.subtitlePaths || [];
   if (subtitlePaths.length === 0) {
-    return { status: "skipped" as const, inputCount: 0, droppedCount: 0, outputPaths: [] };
+    return { status: "skipped" as const, inputCount: 0, translatedCount: 0, failedCount: 0, outputPaths: [] };
   }
 
-  const outputPaths: string[] = [];
-  let inputCount = 0;
-  let droppedCount = 0;
-  const dropped: DroppedItemReport[] = [];
+  const settings = (job.settingsSnapshot || {}) as Partial<RevideoSettings>;
+  const userPrompt =
+    (settings.production?.subtitlePrompt as string) || "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。";
   const context = sourceContext(job, job.source.metadata?.title);
+  const targetDir = path.join(job.artifacts.sourceDir, "subtitles");
+
+  let inputCount = 0;
+  let translatedCount = 0;
+  let failedCount = 0;
+  const allFailedItems: SubtitleFailedItemReport[] = [];
+  const outputPaths: string[] = [];
+
   for (const subtitlePath of subtitlePaths.slice(0, 1)) {
-    const ext = path.extname(subtitlePath) || ".vtt";
-    const targetPath = path.join(job.artifacts.sourceDir, "subtitles", `translated.${targetLanguage}${ext}`);
-    const result = await translateSubtitleFile(subtitlePath, targetPath, targetLanguage, context);
+    const result = await translateSubtitleFile(subtitlePath, targetDir, targetLanguage, context, userPrompt);
     inputCount += result.inputCount;
-    droppedCount += result.droppedCount;
-    dropped.push(...result.dropped);
-    outputPaths.push(targetPath);
+    translatedCount += result.translatedCount;
+    failedCount += result.failedCount;
+    allFailedItems.push(...result.failedItems);
+    outputPaths.push(...result.outputPaths);
   }
 
   const reportPath =
-    inputCount > 0 ? path.join(job.artifacts.sourceDir, "subtitles", `moderation-report.${targetLanguage}.json`) : undefined;
+    inputCount > 0
+      ? path.join(targetDir, `subtitle-report.${targetLanguage}.json`)
+      : undefined;
   if (reportPath) {
-    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
-    fs.writeFileSync(reportPath, JSON.stringify({ dropped }, null, 2));
+    fs.writeFileSync(
+      reportPath,
+      JSON.stringify(
+        {
+          inputCount,
+          translatedCount,
+          failedCount,
+          items: allFailedItems,
+        },
+        null,
+        2,
+      ),
+    );
   }
 
   return {
     status: inputCount > 0 ? ("translated" as const) : ("skipped" as const),
     inputCount,
-    droppedCount,
+    translatedCount,
+    failedCount,
     outputPaths,
     ...(reportPath ? { reportPath } : {}),
   };

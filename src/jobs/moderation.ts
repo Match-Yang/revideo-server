@@ -554,6 +554,227 @@ export async function translateWithSafetyReview(
 
 export const moderateAndTranslateText = translateWithSafetyReview;
 
+export const SENSITIVE_PLACEHOLDER = "[SENSITIVE]";
+
+export interface SubtitleSafetyReviewOutput {
+  id: string;
+  action: "keep" | "sensitive";
+  translation?: string;
+  reason?: string;
+}
+
+export function subtitleContextAwarePrompt(
+  targetLanguage: string,
+  sourceContext: string,
+  fullSubtitleText: string,
+  userPrompt: string,
+): string {
+  return `你是一个严格的字幕安全审核和翻译专家。
+
+## 视频信息
+
+${sourceContext}
+
+## 完整字幕上下文
+
+以下是完整字幕内容，每行一个编号对应一个字幕时间段。通读全部内容理解完整上下文后再翻译。
+
+${fullSubtitleText}
+
+## 翻译指引
+
+目标语言：${targetLanguage}
+
+${userPrompt}
+
+## 安全审核规则
+
+字幕是视频内容本身，审核标准应明显宽松于评论。只过滤明确的违法和极端高风险内容，保留所有正常产品讨论。
+
+### 必须保留的内容（不应标记为敏感）：
+- 产品、技术、价格、设计、品牌、市场、消费者评价等正常讨论
+- 提及政府、政策、法规、监管、补贴、关税、贸易战等，只要语境是讨论产业和商业影响
+- 提及军事、战争，只要语境是比喻或历史背景（如"trade war"、"price war"）
+- 涉及国家间的比较、竞争关系、市场格局讨论
+- 关于经济体制的讨论（资本主义、社会主义、市场经济等）
+- 个人的政治观点表达或社会评论，只要不是煽动性内容
+- 新闻报道式的陈述（"The president announced..."、"The government said..."）
+
+### 标记为敏感的内容（仅限以下明确的极端情况）：
+- 直接煽动民族仇恨、种族歧视、非人化攻击
+- 明确的色情、性暴力、未成年人相关内容
+- 具体的违法犯罪指导（制毒、造假证、黑客攻击教程等）
+- 自残、恐怖主义指导
+- 具体个人的恶意人肉搜索、隐私泄露
+
+### 判断原则：
+- 宁可保留，不要误杀。字幕被误删会直接破坏观看体验。
+- 如果一条字幕只是包含"政府"、"政治"、"军事"等词汇但语境正常，保留。
+- 只有内容本身确实违法或极端有害时才标记为敏感。
+- 敏感内容不翻译、不概括、不清洗，将 translation 字段设为 "${SENSITIVE_PLACEHOLDER}" 占位符。
+- 字幕条目可能是短句片段，只翻译该片段，不要添加注释、解释、补全、标签或"原句不完整"等说明。
+- 如果原文已是目标语言，原样返回。
+- 翻译文本只输出译文，不要包含原文、双语对照、标签、解释或额外行。
+- 翻译文本开头不能有标点符号（如"。"、"，"、"、"、"；"、"！"等）。
+
+## 输入输出格式
+
+输入为紧凑 JSON 数组：
+[{"i":0,"t":"源文本"},{"i":1,"t":"源文本"},...]
+
+输出严格 JSON 数组，不要 markdown，不要外层包装：
+[{"i":0,"a":"k","t":"翻译文本"},{"i":1,"a":"k","t":"翻译文本"},...]
+
+字段：i=编号(与输入一致), a=k(保留翻译)/s(敏感), t=翻译文本或"${SENSITIVE_PLACEHOLDER}", r=仅s时填写简短原因
+
+## 最重要规则：条数必须一致
+
+输入有多少条，输出必须有多少条。少一条或多一条都是严重错误。
+生成完输出后，数一下数组长度，确认和输入一致。如果不一致，你必须修正。
+
+## 示例
+
+示例1（短片段，逐条翻译，不要合并）：
+输入共4条：[{"i":0,"t":"that cut across the nose like glowing"},{"i":1,"t":"blades."},{"i":2,"t":"During the day, they look aggressive and"},{"i":3,"t":"sharp."}]
+输出必须4条：[{"i":0,"a":"k","t":"横贯车头的"},{"i":1,"a":"k","t":"利刃。"},{"i":2,"a":"k","t":"白天看起来很有攻击性，"},{"i":3,"a":"k","t":"很锐利。"}]
+
+示例2（正常完整句）：
+输入共2条：[{"i":0,"t":"This car costs around $40,000 in China."},{"i":1,"t":"That is incredibly cheap for what you get."}]
+输出必须2条：[{"i":0,"a":"k","t":"这款车在中国售价约4万美元。"},{"i":1,"a":"k","t":"以这个配置来说非常划算。"}]
+
+示例3（含敏感项）：
+输入共3条：[{"i":0,"t":"The interior is beautiful."},{"i":1,"t":"[政治煽动内容]"},{"i":2,"t":"Great build quality."}]
+输出必须3条：[{"i":0,"a":"k","t":"内饰很漂亮。"},{"i":1,"a":"s","t":"${SENSITIVE_PLACEHOLDER}","r":"政治煽动"},{"i":2,"a":"k","t":"做工很棒。"}]
+
+错误示例（禁止这样做）：
+输入4条但输出3条 → 错误！
+把i=0和i=1合并成一条输出 → 错误！
+跳过了i=2 → 错误！`;
+
+
+}
+
+function parseSubtitleSafetyBatch(
+  raw: string,
+  inputs: SafetyReviewInput[],
+): SubtitleSafetyReviewOutput[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extractJsonPayload(raw));
+  } catch {
+    const reason = isModelRefusal(raw) ? "model-refusal" : "invalid-json-or-refusal";
+    throw new BatchRetryableTranslationError(reason, `Subtitle batch returned ${reason}`);
+  }
+
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    Array.isArray((parsed as { items?: unknown }).items)
+  ) {
+    parsed = (parsed as { items: unknown[] }).items;
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new BatchRetryableTranslationError("invalid-json-shape", "Subtitle batch response is not an array");
+  }
+  if (parsed.length !== inputs.length) {
+    throw new BatchRetryableTranslationError(
+      "length-mismatch",
+      `Subtitle batch length mismatch: expected ${inputs.length}, got ${parsed.length}`,
+    );
+  }
+
+  return parsed.map((item, index) => {
+    const source = inputs[index];
+    const c = item as Record<string, unknown>;
+
+    const outputI = c.i !== undefined ? Number(c.i) : undefined;
+    if (outputI !== undefined && outputI !== index) {
+      throw new BatchRetryableTranslationError(
+        "id-mismatch",
+        `Subtitle batch i mismatch at ${index}: expected ${index}, got ${outputI}`,
+      );
+    }
+
+    const a = String(c.a ?? c.action ?? "").toLowerCase();
+    if (a === "s" || a === "sensitive" || a === "drop") {
+      return {
+        id: source.id,
+        action: "sensitive" as const,
+        translation: SENSITIVE_PLACEHOLDER,
+        reason: String(c.r ?? c.reason ?? "model"),
+      };
+    }
+
+    const translation = c.t ?? c.translation;
+    if ((a === "k" || a === "keep") && typeof translation === "string" && translation.trim()) {
+      return {
+        id: source.id,
+        action: "keep" as const,
+        translation: translation.trim(),
+      };
+    }
+
+    return {
+      id: source.id,
+      action: "sensitive" as const,
+      translation: SENSITIVE_PLACEHOLDER,
+      reason: "invalid-item",
+    };
+  });
+}
+
+function markBatchSensitive(inputs: SafetyReviewInput[], reason: string): SubtitleSafetyReviewOutput[] {
+  return inputs.map((source) => ({
+    id: source.id,
+    action: "sensitive" as const,
+    translation: SENSITIVE_PLACEHOLDER,
+    reason,
+  }));
+}
+
+export async function translateSubtitleBatchWithContext(
+  inputs: SafetyReviewInput[],
+  targetLanguage: string,
+  systemPrompt: string,
+): Promise<SubtitleSafetyReviewOutput[]> {
+  if (inputs.length === 0) return [];
+
+  const maxBatchAttempts = Math.max(1, Number(process.env.TRANSLATE_BATCH_RETRY_LIMIT || 3));
+  let lastRetryableError: BatchRetryableTranslationError | undefined;
+
+  for (let attempt = 1; attempt <= maxBatchAttempts; attempt += 1) {
+    try {
+      const retryInstruction =
+        attempt > 1
+          ? `\n\n重试 ${attempt}/${maxBatchAttempts}：上次响应验证失败（输出条数与输入不一致）。输入共${inputs.length}条，输出也必须正好${inputs.length}条。数一下你的输出数组长度。`
+          : `\n\n本次输入共${inputs.length}条，输出数组必须正好${inputs.length}条。`;
+
+      const compactInputs = inputs.map((input, idx) => ({ i: idx, t: input.text }));
+      const raw = await translateText({
+        text: JSON.stringify(compactInputs),
+        targetLanguage,
+        systemPrompt: systemPrompt + retryInstruction,
+      });
+
+      return parseSubtitleSafetyBatch(raw, inputs);
+    } catch (error) {
+      if (!(error instanceof BatchRetryableTranslationError)) throw error;
+      lastRetryableError = error;
+      if (attempt < maxBatchAttempts) continue;
+    }
+  }
+
+  const reason = lastRetryableError?.reason || "batch-validation-failed";
+  if (inputs.length === 1) return markBatchSensitive(inputs, reason);
+
+  const [left, right] = splitBatch(inputs);
+  const leftResults = await translateSubtitleBatchWithContext(left, targetLanguage, systemPrompt);
+  const rightResults = await translateSubtitleBatchWithContext(right, targetLanguage, systemPrompt);
+  return [...leftResults, ...rightResults];
+}
+
 export async function translateBatchWithSafetyReview(
   inputs: SafetyReviewInput[],
   targetLanguage: string,

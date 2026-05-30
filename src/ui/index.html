@@ -400,8 +400,13 @@
                 <label><span class="field-label">目标语言继续翻译</span><select name="translation.retranslateTargetLanguage" class="select"><option value="false">否</option><option value="true">是</option></select></label>
               </div>
               <div class="two-col" style="margin-top: 14px;">
-                <label><span class="field-label">正面提示词</span><textarea name="translation.positivePrompt" class="textarea" placeholder="将非中文内容翻译为自然中文；中文内容保持原文；保留必要专有名词和用户语气。"></textarea></label>
-                <label><span class="field-label">负面提示词</span><textarea name="translation.negativePrompt" class="textarea" placeholder="过滤政治敏感、违法交易、色情低俗、仇恨辱骂、诈骗引流、极端主义、平台容易下架的内容；对模糊风险内容按不通过处理。"></textarea></label>
+                <label><span class="field-label">双语字幕</span><select name="translation.bilingualSubtitles" class="select"><option value="false">关闭</option><option value="true">开启</option></select></label>
+              </div>
+              <div style="margin-top: 14px;">
+                <label><span class="field-label">字幕翻译提示词</span><textarea name="translation.subtitlePrompt" class="textarea" placeholder="保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。"></textarea></label>
+              </div>
+              <div style="margin-top: 14px;">
+                <label><span class="field-label">评论翻译提示词</span><textarea name="translation.commentPrompt" class="textarea" placeholder="将非中文评论翻译为自然中文；中文评论保持原文；保留用户语气但不要美化危险内容。"></textarea></label>
               </div>
             </div>
           </section>
