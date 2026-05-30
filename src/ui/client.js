@@ -772,18 +772,39 @@ el.jobDetail.addEventListener("click", async (event) => {
   }
 });
 
+function extractYoutubeId(url) {
+  const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/))([^&?\s/]+)/);
+  return m ? m[1] : null;
+}
+
+function findExistingJobByUrl(url) {
+  const ytId = extractYoutubeId(url);
+  if (!ytId) return null;
+  const jobId = "youtube_" + ytId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
+  return state.jobs.find((job) => job.id === jobId) || null;
+}
+
 el.createJobForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const url = el.sourceUrlInput.value.trim();
   if (!url) return;
   const targets = selectedTargetPlatforms().map((platform) => ({ platform }));
   const repeatTimes = Math.min(10, Math.max(1, Number(el.repeatTimesInput.value || 1)));
+  const existing = findExistingJobByUrl(url);
+  const force = !!existing;
+  if (existing) {
+    const title = existing.source?.metadata?.title || existing.id;
+    if (!confirm(`该链接已有任务"${title}"，是否覆盖重新创建？`)) {
+      toast("已取消");
+      return;
+    }
+  }
   const submitButton = el.createJobForm.querySelector('button[type="submit"]');
   state.creatingJob = true;
   submitButton.disabled = true;
   await renderJobDetail();
   try {
-    const result = await jsonFetch("/api/jobs", {
+    const result = await jsonFetch("/api/jobs" + (force ? "?force=true" : ""), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -798,7 +819,7 @@ el.createJobForm.addEventListener("submit", async (event) => {
     state.selectedJobId = result.job.id;
     localStorage.setItem("selectedJobId", state.selectedJobId);
     el.sourceUrlInput.value = "";
-    toast("任务已创建并加入队列");
+    toast(force ? "任务已覆盖并加入队列" : "任务已创建并加入队列");
     await refreshAll({ full: true });
   } catch (err) {
     toast(err.message);

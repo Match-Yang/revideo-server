@@ -911,7 +911,7 @@ app.use("/out", express.static(outDir));
 // Cross-platform Job API
 // ============================================================
 
-async function createJobFromRequest(body: CreateJobRequest) {
+async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
   if (!body.source?.url) {
     throw new Error("source.url is required");
   }
@@ -928,7 +928,14 @@ async function createJobFromRequest(body: CreateJobRequest) {
 
   const settings = loadSettings();
   const probe = await adapter.probe(body.source.url);
-  cancelJobRunsForJob(createJobId(probe.platform, probe.contentId), "Existing run cancelled before recreating job");
+  const jobId = createJobId(probe.platform, probe.contentId);
+  const existingJob = loadJob(jobId);
+  if (existingJob && !force) {
+    const err = new Error(`任务已存在: ${existingJob.source?.metadata?.title || jobId}。使用 force=true 覆盖。`);
+    err.name = "JobConflict";
+    throw err;
+  }
+  cancelJobRunsForJob(jobId, "Existing run cancelled before recreating job");
   const repeatTimes = Math.min(10, Math.max(1, Number(body.options?.repeatTimes || 1)));
   const targetCommentCount = calculateTargetCommentCount(probe.durationSec, repeatTimes, settings);
   const targets: NonNullable<CreateJobRequest["targets"]> =
@@ -1055,11 +1062,14 @@ app.get("/api/download/formats", async (req, res) => {
 app.post("/api/jobs", async (req, res) => {
   try {
     const body = req.body as CreateJobRequest;
-    const result = await createJobFromRequest(body);
+    const force = req.query.force === "true" || body.force === true;
+    const result = await createJobFromRequest(body, force);
     const run = enqueueJobRun(result.job.id);
     res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
   } catch (err) {
-    const status = err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
+    const status =
+      err instanceof Error && err.name === "JobConflict" ? 409 :
+      err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
