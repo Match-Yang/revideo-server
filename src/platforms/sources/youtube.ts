@@ -224,17 +224,20 @@ export const youtubeSourceAdapter: SourceAdapter = {
 
   async download(request: DownloadRequest): Promise<SourceAssetManifest> {
     const outputTemplate = path.join(request.outputDir, "media", "%(id)s.%(ext)s");
+    const renderComments = request.options.renderComments !== false;
     const commentLimit = Math.max(1, request.options.targetCommentCount || 200);
     const args = [
       "--write-info-json",
-      "--write-comments",
-      "--extractor-args",
-      `youtube:max_comments=${commentLimit},${commentLimit},0,0;comment_sort=top`,
       "--no-playlist",
       "--no-abort-on-error",
       "-o",
       outputTemplate,
     ];
+
+    if (renderComments) {
+      args.push("--write-comments");
+      args.push("--extractor-args", `youtube:max_comments=${commentLimit},${commentLimit},0,0;comment_sort=top`);
+    }
 
     if (request.formatId) {
       args.push("-f", request.formatId);

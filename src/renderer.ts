@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import https from "https";
 import http from "http";
 import type { DirInfo, Comment } from "./types";
@@ -110,6 +110,20 @@ function getVideoDuration(videoPath: string): number {
     return parseFloat(info.format?.duration) || 60;
   } catch {
     return 60;
+  }
+}
+
+function getVideoDimensions(videoPath: string): { width: number; height: number } {
+  try {
+    const out = execSync(
+      `ffprobe -v quiet -print_format json -show_streams "${videoPath}"`,
+      { stdio: ["pipe", "pipe", "pipe"] }
+    );
+    const info = JSON.parse(out.toString());
+    const video = (info.streams || []).find((s: any) => s.codec_type === "video");
+    return { width: video?.width || 1920, height: video?.height || 1080 };
+  } catch {
+    return { width: 1920, height: 1080 };
   }
 }
 
@@ -351,4 +365,129 @@ export async function render(
 
   emit("done", 100, "渲染完成");
   return { output: `out/${dir.name}.mp4`, durationSec };
+}
+
+export async function renderWithFFmpeg(
+  dir: DirInfo,
+  onProgress?: (progress: RenderProgress) => void,
+  signal?: AbortSignal
+): Promise<{ output: string; durationSec: number }> {
+  const emit = (stage: string, percent: number, message: string) => {
+    onProgress?.({ stage, percent, message });
+  };
+
+  emit("preparing", 0, "准备文件 (ffmpeg)...");
+
+  const sourceVideoPath = dir.videoFile!;
+  const sourceVideoDurationSec = getVideoDuration(sourceVideoPath);
+  const repeatTimes = Math.min(10, Math.max(1, Number(dir.repeatTimes || 1)));
+  const durationSec = sourceVideoDurationSec * repeatTimes;
+
+  const outDir = path.join(process.cwd(), "out");
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+
+  // Build video filter chain
+  const vfParts: string[] = [];
+
+  // Burn subtitles if available — copy to /tmp to avoid path escaping issues
+  if (dir.subtitleFiles.length > 0) {
+    const tmpSub = `/tmp/revideo-${dir.name}.vtt`;
+    fs.copyFileSync(dir.subtitleFiles[0], tmpSub);
+    const dims = getVideoDimensions(sourceVideoPath);
+    const isPortrait = dims.height > dims.width;
+    // Font size for ASS (PlayResY=288) — fixed value, ffmpeg auto-scales to video
+    const fontSize = 14;
+    const outlineWidth = Math.max(1, Math.round(fontSize / 8));
+    if (isPortrait) {
+      const marginV = Math.round(288 / 3);
+      const escapedStyle = `FontSize=${fontSize}\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=${outlineWidth}\\,Shadow=0\\,Alignment=8\\,MarginV=${marginV}`;
+      vfParts.push(`subtitles=${tmpSub}:force_style=${escapedStyle}`);
+    } else {
+      const escapedStyle = `FontSize=${fontSize}\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=${outlineWidth}\\,Shadow=0`;
+      vfParts.push(`subtitles=${tmpSub}:force_style=${escapedStyle}`);
+    }
+  }
+
+  const vf = vfParts.length > 0 ? vfParts.join(",") : undefined;
+
+  const outputPath = `out/${dir.name}.mp4`;
+  const ffmpegArgs: string[] = [
+    "-y",
+    "-stream_loop", "-1",
+    "-i", sourceVideoPath,
+    "-t", String(durationSec),
+  ];
+  if (vf) ffmpegArgs.push("-vf", vf);
+  ffmpegArgs.push(
+    "-c:v", "libx264",
+    "-preset", "medium",
+    "-crf", "23",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-shortest",
+    "-movflags", "+faststart",
+    outputPath,
+  );
+
+  emit("rendering", 10, "开始 ffmpeg 渲染...");
+
+  console.log(`[ffmpeg Render] Duration: ${durationSec}s, no filters (original aspect ratio)`);
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn("ffmpeg", ffmpegArgs, {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: process.cwd(),
+    });
+
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        proc.kill("SIGKILL");
+        reject(new Error("ffmpeg render aborted"));
+      });
+    }
+
+    let stderr = "";
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+      const timeMatch = stderr.match(/time=(\d+):(\d+):(\d+)\.(\d+)/g);
+      if (timeMatch) {
+        const last = timeMatch[timeMatch.length - 1];
+        const parts = last.match(/time=(\d+):(\d+):(\d+)\.(\d+)/);
+        if (parts) {
+          const currentTime = +parts[1] * 3600 + +parts[2] * 60 + +parts[3] + +parts[4] / 100;
+          const progress = Math.min(95, Math.round((currentTime / durationSec) * 85));
+          emit("rendering", 10 + progress, `ffmpeg 渲染 ${Math.round((currentTime / durationSec) * 100)}%`);
+        }
+      }
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-500)}`));
+      }
+    });
+    proc.on("error", reject);
+  });
+
+  // Extract cover
+  emit("extracting-cover", 96, "提取封面...");
+  const coverPath = `out/${dir.name}-cover.jpg`;
+  const absCoverPath = path.resolve(process.cwd(), coverPath);
+  if (!fs.existsSync(absCoverPath)) {
+    try {
+      execSync(
+        `ffmpeg -y -i "${sourceVideoPath}" -frames:v 1 -q:v 2 "${coverPath}"`,
+        { stdio: "pipe", cwd: process.cwd() }
+      );
+    } catch (err) {
+      console.warn(`[ffmpeg Render] Failed to extract cover: ${err}`);
+    }
+  }
+
+  emit("done", 100, "ffmpeg 渲染完成");
+  return { output: outputPath, durationSec };
 }

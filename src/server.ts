@@ -526,6 +526,12 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
     throw new Error("Job not found");
   }
 
+  // Sync renderComments from current settings if not explicitly set on job
+  const currentSettings = loadSettings();
+  if (job.options.renderComments === undefined) {
+    job.options.renderComments = currentSettings.production.renderComments !== false;
+  }
+
   const steps = options.steps.length ? options.steps : defaultRunSteps();
   const results: Record<string, unknown> = {};
 
@@ -937,7 +943,10 @@ async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
   }
   cancelJobRunsForJob(jobId, "Existing run cancelled before recreating job");
   const repeatTimes = Math.min(10, Math.max(1, Number(body.options?.repeatTimes || 1)));
-  const targetCommentCount = calculateTargetCommentCount(probe.durationSec, repeatTimes, settings);
+  const renderComments = settings.production.renderComments !== false;
+  const targetCommentCount = renderComments
+    ? calculateTargetCommentCount(probe.durationSec, repeatTimes, settings)
+    : 0;
   const targets: NonNullable<CreateJobRequest["targets"]> =
     body.targets?.length
       ? body.targets
@@ -973,6 +982,7 @@ async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
     ...body.options,
     repeatTimes,
     targetCommentCount,
+    renderComments,
   };
   job.settingsSnapshot = settings;
   saveJob(job);
@@ -1076,13 +1086,14 @@ app.post("/api/jobs", async (req, res) => {
 
 app.post("/api/workflows/youtube", async (req, res) => {
   try {
+    const force = req.query.force === "true" || req.body?.force === true;
     const body: CreateJobRequest = {
       source: { url: req.body?.url || req.body?.source?.url, platform: "youtube" },
       targets: req.body?.targets,
       options: req.body?.options,
       requirement: req.body?.requirement,
     };
-    const result = await createJobFromRequest(body);
+    const result = await createJobFromRequest(body, force);
     const run = enqueueJobRun(result.job.id);
     res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
   } catch (err) {

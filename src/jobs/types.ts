@@ -76,6 +76,7 @@ export interface JobOptions {
   downloadQuality?: "auto" | "best" | "1080p" | "720p" | "480p" | string;
   repeatTimes?: number;
   targetCommentCount?: number;
+  renderComments?: boolean;
   translateProvider?: string;
 }
 

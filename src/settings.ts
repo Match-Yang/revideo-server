@@ -10,6 +10,7 @@ export interface RevideoSettings {
     maxComments: number;
   };
   production: {
+    renderComments: boolean;
     subtitleTargetLanguage: string;
     subtitleRetranslateTargetLanguage: boolean;
     subtitlePrompt: string;
@@ -49,6 +50,7 @@ export const defaultSettings: RevideoSettings = {
     maxComments: 800,
   },
   production: {
+    renderComments: true,
     subtitleTargetLanguage: "zh-CN",
     subtitleRetranslateTargetLanguage: false,
     subtitlePrompt: "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。",

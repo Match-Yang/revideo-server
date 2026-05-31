@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { DirInfo } from "../types";
-import { render, type RenderProgress } from "../renderer";
+import { render, renderWithFFmpeg, type RenderProgress } from "../renderer";
 import type { RevideoJob } from "./types";
 import type { RevideoSettings } from "../settings";
 
@@ -70,7 +70,13 @@ export async function renderJob(
   signal?: AbortSignal
 ): Promise<JobRenderResult> {
   const dirInfo = buildJobDirInfo(job);
-  const result = await render(dirInfo, onProgress, signal);
+  const settings = (job.settingsSnapshot || {}) as Partial<RevideoSettings>;
+  const useComments = job.options.renderComments !== undefined
+    ? job.options.renderComments
+    : settings.production?.renderComments !== false;
+  const result = useComments
+    ? await render(dirInfo, onProgress, signal)
+    : await renderWithFFmpeg(dirInfo, onProgress, signal);
   const outputPath = path.resolve(process.cwd(), result.output);
   const coverPath = path.resolve(process.cwd(), "out", `${job.id}-cover.jpg`);
 

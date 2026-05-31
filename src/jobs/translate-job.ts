@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { RevideoJob } from "./types";
 import type { RevideoSettings } from "../settings";
+import { loadSettings } from "../settings";
 import {
   findLocalSensitiveReason,
   translateBatchWithSafetyReview,
@@ -665,7 +666,10 @@ export async function translateSubtitles(job: RevideoJob, targetLanguage: string
 
 export async function translateJobAssets(job: RevideoJob): Promise<JobTranslationResult> {
   const targetLanguage = job.options.targetLanguage || "zh-CN";
-  const comments = await translateComments(job, targetLanguage);
+  const renderComments = job.options.renderComments ?? loadSettings().production.renderComments;
+  const comments = renderComments === false
+    ? { status: "skipped" as const, inputCount: 0, droppedCount: 0 }
+    : await translateComments(job, targetLanguage);
   const subtitles = await translateSubtitles(job, targetLanguage);
 
   return {
