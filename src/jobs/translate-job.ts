@@ -11,6 +11,11 @@ import {
   SENSITIVE_PLACEHOLDER,
   type SafetyReviewInput,
 } from "./moderation";
+import {
+  cleanSubtitleText,
+  normalizeYouTubeRollingWebVtt,
+  parseSubtitleTimestamp,
+} from "../subtitles/normalize";
 
 interface CommentLike {
   text?: string;
@@ -276,12 +281,6 @@ interface SubtitleCue {
   text: string;
 }
 
-function parseSubtitleTimestamp(value: string): number {
-  const match = value.trim().match(/^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$/);
-  if (!match) return 0;
-  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 1000;
-}
-
 function formatSubtitleTimestamp(seconds: number): string {
   const safe = Math.max(0, seconds);
   const hours = Math.floor(safe / 3600);
@@ -291,150 +290,14 @@ function formatSubtitleTimestamp(seconds: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
 
-function cleanSubtitleCueText(value: string): string {
-  return value
-    .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
-    .replace(/<\/?c[^>]*>/g, "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function overlappingPrefixWordCount(previous: string, current: string): number {
-  const previousWords = previous.split(/\s+/).filter(Boolean);
-  const currentWords = current.split(/\s+/).filter(Boolean);
-  const max = Math.min(previousWords.length, currentWords.length);
-  for (let size = max; size > 0; size -= 1) {
-    const prevTail = previousWords.slice(previousWords.length - size).join(" ").toLowerCase();
-    const currentHead = currentWords.slice(0, size).join(" ").toLowerCase();
-    if (prevTail === currentHead) return size;
-  }
-  return 0;
-}
-
-function reduceRollingSubtitleCues(cues: SubtitleCue[]): SubtitleCue[] {
-  const reduced: SubtitleCue[] = [];
-  let previousFullText = "";
-
-  for (const cue of cues) {
-    if (cue.end - cue.start < 0.12) continue;
-    const words = cue.text.split(/\s+/).filter(Boolean);
-    const overlap = previousFullText ? overlappingPrefixWordCount(previousFullText, cue.text) : 0;
-    const text = (overlap > 0 ? words.slice(overlap).join(" ") : cue.text).trim();
-    previousFullText = cue.text;
-    if (!text) continue;
-    if (reduced[reduced.length - 1]?.text === text) continue;
-    reduced.push({ ...cue, id: `cue-${reduced.length}`, text });
-  }
-
-  return reduced.length ? reduced : cues;
-}
-
-interface MergedSegment {
-  id: string;
-  text: string;
-  cueIndices: number[];
-}
-
-function endsSentence(text: string): boolean {
-  return /[.!?]["'")\]]*\s*$/.test(text.trim());
-}
-
-function mergeConsecutiveCues(cues: SubtitleCue[]): MergedSegment[] {
-  const segments: MergedSegment[] = [];
-  let groupTexts: string[] = [];
-  let groupIndices: number[] = [];
-
-  const flush = () => {
-    if (groupIndices.length === 0) return;
-    const text = groupTexts.join(" ");
-    segments.push({
-      id: `seg-${segments.length}`,
-      text,
-      cueIndices: [...groupIndices],
-    });
-    groupTexts = [];
-    groupIndices = [];
-  };
-
-  for (let i = 0; i < cues.length; i++) {
-    groupTexts.push(cues[i].text);
-    groupIndices.push(i);
-    if (endsSentence(cues[i].text)) {
-      flush();
-    }
-  }
-  flush();
-
-  return segments;
-}
-
-function splitTranslationToCues(
-  segments: MergedSegment[],
-  translations: Map<string, string>,
-  cues: SubtitleCue[],
-): Map<string, string> {
-  const result = new Map<string, string>();
-
-  for (const seg of segments) {
-    const translation = translations.get(seg.id);
-    if (!translation) {
-      for (const idx of seg.cueIndices) {
-        result.set(cues[idx].id, cues[idx].text);
-      }
-      continue;
-    }
-
-    if (seg.cueIndices.length === 1) {
-      result.set(cues[seg.cueIndices[0]].id, translation);
-      continue;
-    }
-
-    // Split translation proportionally by original word count
-    const origWords = seg.cueIndices.map(idx => cues[idx].text.split(/\s+/).filter(Boolean));
-    const totalWords = origWords.reduce((sum, w) => sum + w.length, 0);
-    const transChars = translation.length;
-    const cueTranslations: string[] = [];
-
-    const stripLeadingPunctuation = (s: string) => s.replace(/^[，。、；：！？,.!?;:\s]+/, "");
-    let usedChars = 0;
-    for (let j = 0; j < origWords.length; j++) {
-      const share = totalWords > 0 ? origWords[j].length / totalWords : 1 / origWords.length;
-      if (j === origWords.length - 1) {
-        cueTranslations.push(stripLeadingPunctuation(translation.slice(usedChars)).trimEnd());
-      } else {
-        const cut = Math.round(transChars * share) + usedChars;
-        // Try to cut at a natural boundary
-        let cutPoint = cut;
-        for (let k = Math.min(cut + 5, translation.length); k >= Math.max(cut - 5, usedChars); k--) {
-          if (translation[k] === " " || translation[k] === "，" || translation[k] === "。" ||
-              translation[k] === "、" || translation[k] === "；" || translation[k] === "！" ||
-              translation[k] === "？" || translation[k] === "：" ||
-              translation[k] === "," || translation[k] === "." || translation[k] === "!" ||
-              translation[k] === "?" || translation[k] === ";") {
-            cutPoint = k + 1;
-            break;
-          }
-        }
-        cueTranslations.push(stripLeadingPunctuation(translation.slice(usedChars, cutPoint)).trimEnd());
-        usedChars = cutPoint;
-      }
-    }
-
-    for (let j = 0; j < seg.cueIndices.length; j++) {
-      result.set(cues[seg.cueIndices[j]].id, cueTranslations[j] || cues[seg.cueIndices[j]].text);
-    }
-  }
-
-  return result;
-}
-
 function parseSubtitleCues(content: string): SubtitleCue[] {
+  const normalizedRollingCues = normalizeYouTubeRollingWebVtt(content);
+  if (normalizedRollingCues) return normalizedRollingCues;
+
   const blocks = content
     .split(/\n\s*\n/g)
     .map((block) => block.split(/\r?\n/));
   const cues: SubtitleCue[] = [];
-  const hasInlineTiming = /<\d{2}:\d{2}:\d{2}\.\d{3}>/.test(content);
 
   blocks.forEach((block, blockIndex) => {
     const timingIndex = block.findIndex((line) => line.includes("-->"));
@@ -445,8 +308,8 @@ function parseSubtitleCues(content: string): SubtitleCue[] {
     if (!timing) return;
     let textStart = timingIndex + 1;
     while (textStart < block.length && !block[textStart].trim()) textStart++;
-    const textEnd = block.length;
-    const text = cleanSubtitleCueText(block.slice(textStart, textEnd).join("\n"));
+    const textLines = block.slice(textStart);
+    const text = cleanSubtitleText(textLines.join("\n"));
     if (!text) return;
     cues.push({
       id: `cue-${blockIndex}`,
@@ -456,11 +319,11 @@ function parseSubtitleCues(content: string): SubtitleCue[] {
     });
   });
 
-  return hasInlineTiming ? reduceRollingSubtitleCues(cues) : cues;
+  return cues;
 }
 
 function sanitizeTranslatedSubtitleText(value: string): string {
-  return cleanSubtitleCueText(value)
+  return cleanSubtitleText(value)
     .replace(/\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}/g, "")
     .replace(/\bWEBVTT\b/gi, "")
     .replace(/^[（(]?\s*(注|说明|备注)[:：].*$/g, "")
@@ -490,16 +353,12 @@ async function translateSubtitleFile(
   const cues = parseSubtitleCues(content);
   const batchSize = Number(process.env.TRANSLATE_SUBTITLE_BATCH_SIZE || 100);
 
-  // Merge consecutive non-sentence-ending fragments into complete segments
-  const segments = mergeConsecutiveCues(cues);
-  const segById = new Map(segments.map((seg) => [seg.id, seg]));
-
+  const cueById = new Map(cues.map((cue) => [cue.id, cue]));
   const fullSubtitleText = buildFullSubtitleContext(cues);
   const systemPrompt = subtitleContextAwarePrompt(targetLanguage, context, fullSubtitleText, userPrompt);
 
-  const inputs: SafetyReviewInput[] = segments.map((seg) => ({ id: seg.id, text: seg.text }));
-  const translatedSegById = new Map<string, string>();
-  const failedSegments = new Set<string>();
+  const inputs: SafetyReviewInput[] = cues.map((cue) => ({ id: cue.id, text: cue.text }));
+  const translatedById = new Map<string, string>();
   const failedItems: SubtitleFailedItemReport[] = [];
   let translatedCount = 0;
   let failedCount = 0;
@@ -525,54 +384,43 @@ async function translateSubtitleFile(
 
   for (const results of batchResults) {
     for (const result of results) {
-      const seg = segById.get(result.id);
-      if (!seg) throw new Error(`Translated segment id not found: ${result.id}`);
+      const cue = cueById.get(result.id);
+      if (!cue) throw new Error(`Translated cue id not found: ${result.id}`);
 
       if (result.action === "sensitive" || result.translation === SENSITIVE_PLACEHOLDER) {
-        failedCount += seg.cueIndices.length;
-        failedSegments.add(seg.id);
-        for (const idx of seg.cueIndices) {
-          const cue = cues[idx];
-          failedItems.push({
-            id: cue.id,
-            start: cue.start,
-            end: cue.end,
-            timestampRange: `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}`,
-            originalText: cue.text,
-            reason: result.reason?.startsWith("translated-") ? "sensitive-local" : "sensitive",
-            detail: result.reason || "model",
-          });
-        }
+        failedCount += 1;
+        failedItems.push({
+          id: cue.id,
+          start: cue.start,
+          end: cue.end,
+          timestampRange: `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}`,
+          originalText: cue.text,
+          reason: result.reason?.startsWith("translated-") ? "sensitive-local" : "sensitive",
+          detail: result.reason || "model",
+        });
         continue;
       }
 
       const translation = sanitizeTranslatedSubtitleText(result.translation || "");
       const postScanReason = findLocalSensitiveReason(translation);
       if (postScanReason) {
-        failedCount += seg.cueIndices.length;
-        failedSegments.add(seg.id);
-        for (const idx of seg.cueIndices) {
-          const cue = cues[idx];
-          failedItems.push({
-            id: cue.id,
-            start: cue.start,
-            end: cue.end,
-            timestampRange: `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}`,
-            originalText: cue.text,
-            reason: "sensitive-local",
-            detail: `translated-${postScanReason}`,
-          });
-        }
+        failedCount += 1;
+        failedItems.push({
+          id: cue.id,
+          start: cue.start,
+          end: cue.end,
+          timestampRange: `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}`,
+          originalText: cue.text,
+          reason: "sensitive-local",
+          detail: `translated-${postScanReason}`,
+        });
         continue;
       }
 
-      translatedSegById.set(seg.id, translation || seg.text);
-      translatedCount += seg.cueIndices.length;
+      translatedById.set(cue.id, translation || cue.text);
+      translatedCount += 1;
     }
   }
-
-  // Split segment translations back to individual cues
-  const translatedById = splitTranslationToCues(segments, translatedSegById, cues);
 
   fs.mkdirSync(targetDir, { recursive: true });
 

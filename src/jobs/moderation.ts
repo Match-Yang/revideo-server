@@ -611,11 +611,14 @@ ${userPrompt}
 - 宁可保留，不要误杀。字幕被误删会直接破坏观看体验。
 - 如果一条字幕只是包含"政府"、"政治"、"军事"等词汇但语境正常，保留。
 - 只有内容本身确实违法或极端有害时才标记为敏感。
+- 标记为敏感时，r 字段必须填写具体原因（如"煽动仇恨"、"色情"、"犯罪指导"）。没有充分理由不得标记为敏感，不确定的内容一律保留翻译。
+- 产品评测、技术参数、电池续航、价格对比、品牌评价、市场分析等正常商业讨论绝对不能标记为敏感。
 - 敏感内容不翻译、不概括、不清洗，将 translation 字段设为 "${SENSITIVE_PLACEHOLDER}" 占位符。
-- 字幕条目可能是短句片段，只翻译该片段，不要添加注释、解释、补全、标签或"原句不完整"等说明。
+- 输入字幕已经按正常语义段切分。逐条翻译当前字幕段，不要把某一条的内容提前、延后或合并到相邻条目。
 - 如果原文已是目标语言，原样返回。
 - 翻译文本只输出译文，不要包含原文、双语对照、标签、解释或额外行。
 - 翻译文本开头不能有标点符号（如"。"、"，"、"、"、"；"、"！"等）。
+- 每条 t 字段必须只包含对应输入条目的译文。严禁输出相邻条目的内容。
 
 ## 输入输出格式
 
@@ -634,9 +637,9 @@ ${userPrompt}
 
 ## 示例
 
-示例1（短片段，逐条翻译，不要合并）：
-输入共4条：[{"i":0,"t":"that cut across the nose like glowing"},{"i":1,"t":"blades."},{"i":2,"t":"During the day, they look aggressive and"},{"i":3,"t":"sharp."}]
-输出必须4条：[{"i":0,"a":"k","t":"横贯车头的"},{"i":1,"a":"k","t":"利刃。"},{"i":2,"a":"k","t":"白天看起来很有攻击性，"},{"i":3,"a":"k","t":"很锐利。"}]
+示例1（正常语义段逐条翻译）：
+输入共3条：[{"i":0,"t":"And this car is coming to the West."},{"i":1,"t":"Apparently it could even be coming to the United States because Geely plans on coming to the United States."},{"i":2,"t":"They own Volvo and Polestar, which are in the US right now."}]
+输出必须3条：[{"i":0,"a":"k","t":"这款车即将进入西方市场。"},{"i":1,"a":"k","t":"它甚至可能进入美国，因为吉利计划进军美国市场。"},{"i":2,"a":"k","t":"他们拥有沃尔沃和极星，这两个品牌目前已经在美国销售。"}]
 
 示例2（正常完整句）：
 输入共2条：[{"i":0,"t":"This car costs around $40,000 in China."},{"i":1,"t":"That is incredibly cheap for what you get."}]
@@ -646,10 +649,13 @@ ${userPrompt}
 输入共3条：[{"i":0,"t":"The interior is beautiful."},{"i":1,"t":"[政治煽动内容]"},{"i":2,"t":"Great build quality."}]
 输出必须3条：[{"i":0,"a":"k","t":"内饰很漂亮。"},{"i":1,"a":"s","t":"${SENSITIVE_PLACEHOLDER}","r":"政治煽动"},{"i":2,"a":"k","t":"做工很棒。"}]
 
-错误示例（禁止这样做）：
-输入4条但输出3条 → 错误！
-把i=0和i=1合并成一条输出 → 错误！
-跳过了i=2 → 错误！`;
+## 错误示例（严格禁止）
+
+输入共3条：[{"i":0,"t":"The car is similar to the BYD Dolphin."},{"i":1,"t":"But it is $4,000 cheaper."},{"i":2,"t":"Here are the specs and details."}]
+❌ 错误输出（把第2、3条内容提前合并到第1条）：
+[{"i":0,"a":"k","t":"这款车和比亚迪海豚很像，但便宜4000美元，下面是参数。"},{"i":1,"a":"k","t":"但它便宜4000美元。"},{"i":2,"a":"k","t":"下面是参数和细节。"}]
+✓ 正确输出（每条只翻译本条内容）：
+[{"i":0,"a":"k","t":"这款车和比亚迪海豚很相似。"},{"i":1,"a":"k","t":"但它要便宜4000美元。"},{"i":2,"a":"k","t":"下面是它的参数和详细信息。"}]`;
 
 
 }
@@ -708,7 +714,7 @@ function parseSubtitleSafetyBatch(
     }
 
     const translation = c.t ?? c.translation;
-    if ((a === "k" || a === "keep") && typeof translation === "string" && translation.trim()) {
+    if (typeof translation === "string" && translation.trim()) {
       return {
         id: source.id,
         action: "keep" as const,
@@ -753,9 +759,9 @@ export async function translateSubtitleBatchWithContext(
 
       const compactInputs = inputs.map((input, idx) => ({ i: idx, t: input.text }));
       const raw = await translateText({
-        text: JSON.stringify(compactInputs),
+        text: JSON.stringify(compactInputs) + retryInstruction,
         targetLanguage,
-        systemPrompt: systemPrompt + retryInstruction,
+        systemPrompt,
       });
 
       return parseSubtitleSafetyBatch(raw, inputs);
@@ -795,9 +801,9 @@ export async function translateBatchWithSafetyReview(
             )}. Do not return the source English/non-Chinese text as translation.`
           : "";
       const raw = await translateText({
-        text: JSON.stringify(inputs),
+        text: JSON.stringify(inputs) + retryInstruction,
         targetLanguage,
-        systemPrompt: batchSafetyReviewTranslationPrompt(kind, targetLanguage, context) + retryInstruction,
+        systemPrompt: batchSafetyReviewTranslationPrompt(kind, targetLanguage, context),
       });
 
       return parseSafetyReviewBatch(raw, inputs, targetLanguage);

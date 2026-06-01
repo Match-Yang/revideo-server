@@ -1,5 +1,36 @@
 # 字幕翻译最终方案
 
+## 2026-06 实践修正：先把 YouTube 滚动字幕转为正常字幕
+
+实践发现，YouTube 自动字幕常见的 rolling WebVTT 不是正常语义字幕，而是带 `<00:00:00.000>` 内联时间戳的滚动快照。直接把这些 cue 去重后送入翻译，会让模型把后续语义提前合并到当前 cue，导致译文和音频明显错位。
+
+新的规则是：**翻译前必须先将 rolling WebVTT 归一化为正常语义 cue**。
+
+流程：
+
+1. 检测 `<HH:MM:SS.mmm>` WebVTT timestamp tag。
+2. 按 WebVTT timing line 扫描 cue，避免 YouTube cue 内部空白行把 block 切坏。
+3. 从内联时间戳提取 timed fragments。
+4. 按句末标点、停顿、最大时长和长度合并为 normal cues。
+5. LLM 只负责逐条翻译 normal cue，不再负责把完整译文分配回 rolling cue。
+6. 输出的 `translated.{lang}.vtt` 使用 normal cue 的新时间轴。
+
+在 `youtube_NAgtd-5Lk4s` 样本中，原先会得到 184 条 rolling 碎片；归一化后得到 114 条正常字幕段，首段从：
+
+```
+a $9,500
+car,<00:00:03.600><c> which</c>...
+```
+
+还原为：
+
+```
+00:00:00.240 --> 00:00:05.680
+a $9,500 car, which is not a micro car.
+```
+
+这一步把“时间轴对齐”从 LLM 输出中拿回到本地确定性代码里，是解决错位的关键。
+
 ## 要解决的问题
 
 字幕文件中一句话经常被拆成 2-3 个时间段（cue），逐段翻译导致不连贯：
@@ -46,8 +77,8 @@ LLM 只看到 "I went to the" 时不知道后面是什么，翻译出来就是�
       │
       ▼
 ① 解析 + 预处理
-   parseSubtitleCues()          → 解析时间戳和文本
-   reduceRollingSubtitleCues()  → YouTube 滚动字幕去重
+   parseSubtitleCues()                  → 解析时间戳和文本
+   normalizeYouTubeRollingWebVtt()      → YouTube 滚动字幕转正常语义 cue
       │
       ▼
 ② 生成完整字幕上下文
@@ -466,7 +497,7 @@ production: {
 - 新增 `buildFullSubtitleContext(cues)` — 生成编号列表格式完整字幕
 - 修改 `translateSubtitleFile()` — 生成 fullSubtitleText 传入翻译函数；生成两份字幕文件；生成 `subtitle-report.{lang}.json`
 - 修改 `translateSubtitles()` — 输出路径包含双语文件；metadata 中记录 reportPath
-- 保留 `parseSubtitleCues` / `reduceRollingSubtitleCues` / `sanitizeTranslatedSubtitleText`
+- 保留 `parseSubtitleCues` / `normalizeYouTubeRollingWebVtt` / `sanitizeTranslatedSubtitleText`
 
 **`src/jobs/moderation.ts`**：
 - 新增 `subtitleContextAwarePrompt()` — 独立的字幕翻译 prompt 模板（带视频元信息 + 完整字幕上下文 + 安全审核 + 用户提示词）
