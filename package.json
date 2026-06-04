@@ -33,6 +33,7 @@
   "scripts": {
     "dev": "remotion studio",
     "ui": "tsx src/server.ts",
+    "restart:ui": "scripts/restart-ui.sh",
     "render": "npx tsx src/render.ts",
     "build": "remotion bundle",
     "upgrade": "remotion upgrade",

@@ -664,7 +664,7 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
     assertRunNotCancelled(options);
     if (steps.includes("render")) {
       const latest = loadJob(job.id) || job;
-      const reusableRender = existingRenderResult(latest);
+      const reusableRender = options.force ? null : existingRenderResult(latest);
       if (reusableRender) {
         latest.artifacts.outputVideo = reusableRender.outputPath;
         latest.artifacts.coverImage = reusableRender.coverPath;

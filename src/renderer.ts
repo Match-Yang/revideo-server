@@ -9,6 +9,7 @@ import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 import type { RenderMediaOnProgress } from "@remotion/renderer";
 import { enableTailwind } from "@remotion/tailwind-v4";
+import { renderFfmpegComments } from "./renderers/ffmpeg-comments";
 
 const PROXY = "http://127.0.0.1:7897";
 
@@ -261,7 +262,9 @@ export async function render(
     try {
       const data = JSON.parse(fs.readFileSync(commentsPath, "utf-8"));
       if (data.duration) durationSec = Math.max(durationSec, Number(data.duration) || 0);
-    } catch {}
+    } catch (err) {
+      console.warn(`[ffmpeg Render] Failed to read comments duration: ${err}`);
+    }
   }
 
   const fps = 30;
@@ -378,23 +381,58 @@ export async function renderWithFFmpeg(
 
   emit("preparing", 0, "准备文件 (ffmpeg)...");
 
-  const sourceVideoPath = dir.videoFile!;
+  preparePublicDir(dir);
+  if (dir.commentFile) {
+    emit("downloading-avatars", 3, "下载头像...");
+    await downloadAvatars();
+  }
+
+  const videoExt = path.extname(dir.videoFile!);
+  const sourceVideoPath = path.join(PUBLIC_DIR, `video${videoExt}`);
   const sourceVideoDurationSec = getVideoDuration(sourceVideoPath);
   const repeatTimes = Math.min(10, Math.max(1, Number(dir.repeatTimes || 1)));
-  const durationSec = sourceVideoDurationSec * repeatTimes;
+  let durationSec = sourceVideoDurationSec * repeatTimes;
+  const commentsPath = path.join(PUBLIC_DIR, "comments.json");
+  if (fs.existsSync(commentsPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(commentsPath, "utf-8"));
+      if (data.duration) durationSec = Math.max(durationSec, Number(data.duration) || 0);
+    } catch {}
+  }
 
   const outDir = path.join(process.cwd(), "out");
   if (!fs.existsSync(outDir)) {
     fs.mkdirSync(outDir, { recursive: true });
   }
 
+  const outputPath = `out/${dir.name}.mp4`;
+  const absOutputPath = path.resolve(process.cwd(), outputPath);
+  const subtitlePath = dir.subtitleFiles.length > 0
+    ? path.join(PUBLIC_DIR, path.basename(dir.subtitleFiles[0]))
+    : undefined;
+  const hasComments = fs.existsSync(commentsPath);
+
+  if (hasComments) {
+    emit("rendering", 8, "开始 ffmpeg 评论渲染...");
+    await renderFfmpegComments({
+      videoPath: sourceVideoPath,
+      commentPath: commentsPath,
+      subtitlePath,
+      avatarDir: path.join(PUBLIC_DIR, "avatars"),
+      outputPath: absOutputPath,
+      durationSec,
+      fps: 30,
+      signal,
+      onProgress,
+    });
+  } else {
   // Build video filter chain
   const vfParts: string[] = [];
 
   // Burn subtitles if available — copy to /tmp to avoid path escaping issues
-  if (dir.subtitleFiles.length > 0) {
+  if (subtitlePath) {
     const tmpSub = `/tmp/revideo-${dir.name}.vtt`;
-    fs.copyFileSync(dir.subtitleFiles[0], tmpSub);
+    fs.copyFileSync(subtitlePath, tmpSub);
     const dims = getVideoDimensions(sourceVideoPath);
     const isPortrait = dims.height > dims.width;
     // Font size for ASS (PlayResY=288) — fixed value, ffmpeg auto-scales to video
@@ -412,7 +450,6 @@ export async function renderWithFFmpeg(
 
   const vf = vfParts.length > 0 ? vfParts.join(",") : undefined;
 
-  const outputPath = `out/${dir.name}.mp4`;
   const ffmpegArgs: string[] = [
     "-y",
     "-stream_loop", "-1",
@@ -472,6 +509,7 @@ export async function renderWithFFmpeg(
     });
     proc.on("error", reject);
   });
+  }
 
   // Extract cover
   emit("extracting-cover", 96, "提取封面...");
