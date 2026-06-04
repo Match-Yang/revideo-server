@@ -10,5 +10,5 @@
     "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": true
   },
-  "exclude": ["src/scan-dir.ts"]
+  "exclude": ["dashboard", "src/scan-dir.ts"]
 }

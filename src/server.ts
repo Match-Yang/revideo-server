@@ -804,9 +804,12 @@ function enqueueJobRun(
   return run;
 }
 
-// Serve static UI files
-const ui_dir = path.join(__dirname, "ui");
-app.use(express.static(ui_dir));
+// Serve the shadcn/Next dashboard when built, with the legacy static UI as a fallback for development.
+const dashboardOutDir = path.join(process.cwd(), "dashboard", "out");
+const ui_dir = fs.existsSync(path.join(dashboardOutDir, "index.html"))
+  ? dashboardOutDir
+  : path.join(__dirname, "ui");
+app.use(express.static(ui_dir, { extensions: ["html"] }));
 
 // Serve rendered output files
 const outDir = path.join(process.cwd(), "out");
@@ -2015,6 +2018,15 @@ app.post("/api/tasks/cleanup", (_req, res) => {
     console.error("[Tasks API] Error cleaning up tasks:", err);
     res.status(500).json({ error: String(err) });
   }
+});
+
+app.get(/^(?!\/api\/|\/out\/).*/, (req, res) => {
+  const indexPath = path.join(ui_dir, "index.html");
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+    return;
+  }
+  res.status(404).send("Dashboard has not been built yet. Run npm run dashboard:build.");
 });
 
 app.listen(PORT, () => {
