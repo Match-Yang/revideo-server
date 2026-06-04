@@ -374,7 +374,7 @@ async function publishBilibili(
       const declarationSelected = await page.evaluate(() => {
         // Find the 创作声明 select input
         const selectInput = Array.from(document.querySelectorAll('.bcc-select-input-inner'))
-          .find(el => el.getAttribute('placeholder')?.includes('创作声明') && (el as HTMLElement).offsetHeight > 0) as HTMLElement | undefined;
+          .find(el => el.getAttribute('placeholder')?.includes('创作声明') && (el as HTMLElement).offsetHeight > 0) as HTMLInputElement | undefined;
         if (!selectInput) return false;
         // Check if already has a value selected
         if (selectInput.getAttribute('readonly') === 'readonly' && selectInput.value && selectInput.value !== '请选择符合您视频内容的创作声明') {
@@ -435,15 +435,16 @@ async function publishBilibili(
       if (tagInput && tagInput.asElement()) {
         const inputEl = tagInput.asElement()!;
         for (const tag of tags) {
-          await page.evaluate((el: HTMLInputElement, val: string) => {
-            el.focus();
-            el.value = '';
+          await page.evaluate((el: Node, val: string) => {
+            const input = el as HTMLInputElement;
+            input.focus();
+            input.value = '';
             document.execCommand('selectAll', false, undefined);
             document.execCommand('insertText', false, val);
-            el.dispatchEvent(new KeyboardEvent('keydown', {
+            input.dispatchEvent(new KeyboardEvent('keydown', {
               key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
             }));
-            el.dispatchEvent(new KeyboardEvent('keyup', {
+            input.dispatchEvent(new KeyboardEvent('keyup', {
               key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
             }));
           }, inputEl, tag);
@@ -626,7 +627,7 @@ async function publishBilibili(
         // Detect error tips that block submission
         const errorTips = ["至少填写一个标签", "请选择分区", "请填写标题", "请上传封面", "请选择创作声明"];
         for (const tip of errorTips) {
-          if (bodyText.includes(tip)) return ("error:" + tip) as const;
+          if (bodyText.includes(tip)) return `error:${tip}`;
         }
         return "unknown" as const;
       });

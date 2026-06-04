@@ -2,8 +2,7 @@ import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { execSync, spawn, type ChildProcess } from "child_process";
-import { getDirs, getDirByName, render, preparePublicDir } from "./renderer";
+import { getDirs, getDirByName, renderWithFFmpeg } from "./renderer";
 import { scanDir } from "./scan-dir";
 import { publish, type PublishRequest } from "./publish";
 import { SERVER_PORT } from "./config";
@@ -21,7 +20,7 @@ import {
   setJobStep,
 } from "./jobs/store";
 import { normalizeJobAssets } from "./jobs/normalize";
-import { buildJobDirInfo, renderJob } from "./jobs/render-job";
+import { renderJob } from "./jobs/render-job";
 import { translateJobAssets } from "./jobs/translate-job";
 import type { CreateJobRequest, JobStep } from "./jobs/types";
 import { generateDrafts } from "./jobs/drafts";
@@ -97,8 +96,6 @@ const cancelledJobRunIds = new Set<string>();
 const pausedJobRunIds = new Set<string>();
 const scheduledPublishRuns = new Map<string, ScheduledPublishRun>();
 let activeJobRun: QueuedJobRun | null = null;
-let studioPreviewProcess: ChildProcess | null = null;
-let studioPreviewJobId: string | null = null;
 
 const app = express();
 const PORT = SERVER_PORT;
@@ -246,102 +243,6 @@ function schedulePublishRun(jobId: string, delayMs = getScheduledPublishDelayMs(
   scheduledPublishRuns.set(jobId, { jobId, runAt, timer });
 }
 
-function terminateRenderProcesses(): void {
-  try {
-    execSync(
-      "pkill -f 'node_modules/@remotion/compositor|node_modules/.remotion/chrome-headless-shell' || true",
-      { stdio: "ignore" }
-    );
-  } catch {
-    // Best-effort cleanup. The abort signal remains the primary cancellation path.
-  }
-}
-
-function remotionStudioPort(): number {
-  return Math.max(1, Number(process.env.REMOTION_STUDIO_PORT || 3000));
-}
-
-function pidsListeningOnPort(port: number): number[] {
-  try {
-    return execSync(`lsof -tiTCP:${port} -sTCP:LISTEN -n -P || true`, { encoding: "utf-8" })
-      .split(/\s+/)
-      .map((value) => Number(value))
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function processCommand(pid: number): string {
-  try {
-    return execSync(`ps -p ${pid} -o command=`, { encoding: "utf-8" }).trim();
-  } catch {
-    return "";
-  }
-}
-
-function stopRemotionStudioOnPort(port: number): void {
-  const pids = pidsListeningOnPort(port);
-  for (const pid of pids) {
-    const command = processCommand(pid);
-    if (!/remotion\s+studio|npx\s+remotion/i.test(command)) continue;
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {}
-  }
-}
-
-function buildStudioProps(job: NonNullable<ReturnType<typeof loadJob>>, dirInfo = buildJobDirInfo(job)) {
-  const videoExt = path.extname(dirInfo.videoFile || ".mp4");
-  const normalized = job.source.metadata?.normalizedAssets as { durationSec?: number } | undefined;
-  const sourceDurationSec = Math.max(1, Number(normalized?.durationSec || job.source.metadata?.durationSec || 60));
-  const repeatTimes = Math.min(10, Math.max(1, Number(job.options.repeatTimes || 1)));
-  return {
-    dirPath: dirInfo.path,
-    videoFile: `video${videoExt}`,
-    commentFile: dirInfo.commentFile ? "comments.json" : "",
-    subtitleFiles: dirInfo.subtitleFiles.length > 0 ? [path.basename(dirInfo.subtitleFiles[0])] : [],
-    durationInFrames: Math.ceil(sourceDurationSec * repeatTimes * 30),
-    sourceVideoDurationInFrames: Math.ceil(sourceDurationSec * 30),
-  };
-}
-
-function startRemotionStudioPreview(jobId: string, studioProps: ReturnType<typeof buildStudioProps>) {
-  const port = remotionStudioPort();
-  if (studioPreviewProcess && !studioPreviewProcess.killed) {
-    studioPreviewProcess.kill("SIGTERM");
-    studioPreviewProcess = null;
-  }
-  stopRemotionStudioOnPort(port);
-
-  const logPath = path.join(process.cwd(), "data", "remotion-studio.log");
-  fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  const log = fs.createWriteStream(logPath, { flags: "a" });
-  const child = spawn("npx", ["remotion", "studio", "--port", String(port), "--props", JSON.stringify(studioProps)], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.pipe(log, { end: false });
-  child.stderr.pipe(log, { end: false });
-  child.on("exit", () => {
-    log.end();
-    if (studioPreviewProcess === child) {
-      studioPreviewProcess = null;
-      studioPreviewJobId = null;
-    }
-  });
-  child.unref();
-  studioPreviewProcess = child;
-  studioPreviewJobId = jobId;
-
-  return {
-    studioUrl: `http://localhost:${port}`,
-    previewJobId: studioPreviewJobId,
-    logPath,
-  };
-}
-
 function assertRunNotCancelled(options: JobRunOptions): void {
   if (options.signal?.aborted) {
     throw new Error("Job run cancelled");
@@ -469,7 +370,6 @@ function cancelJobRunsForJob(jobId: string, reason: string): void {
     activeJobRun.abortController?.abort();
     if (currentRender?.taskId === jobId) {
       currentRender.abortController?.abort();
-      terminateRenderProcesses();
     }
     setJobStep(jobId, "cancelled", "completed", { percent: 100 });
     appendJobEvent({
@@ -504,7 +404,6 @@ function pauseJobRunsForJob(jobId: string, reason: string): QueuedJobRun | null 
     activeJobRun.abortController?.abort();
     if (currentRender?.taskId === jobId) {
       currentRender.abortController?.abort();
-      terminateRenderProcesses();
     }
     pauseCurrentRunningStep(jobId, reason);
     appendJobEvent({
@@ -1071,7 +970,7 @@ app.get("/api/download/formats", async (req, res) => {
 
 app.post("/api/jobs", async (req, res) => {
   try {
-    const body = req.body as CreateJobRequest;
+    const body = req.body as CreateJobRequest & { force?: boolean };
     const force = req.query.force === "true" || body.force === true;
     const result = await createJobFromRequest(body, force);
     const run = enqueueJobRun(result.job.id);
@@ -1143,70 +1042,6 @@ app.get("/api/jobs/:jobId/artifact", (req, res) => {
   res.type(path.extname(resolvedPath) || "text/plain").sendFile(resolvedPath);
 });
 
-app.post("/api/jobs/:jobId/prepare-preview", (req, res) => {
-  const job = loadJob(req.params.jobId);
-  if (!job) {
-    res.status(404).json({ error: "Job not found" });
-    return;
-  }
-
-  try {
-    const dirInfo = buildJobDirInfo(job);
-    preparePublicDir(dirInfo);
-    const studioProps = buildStudioProps(job, dirInfo);
-    const port = remotionStudioPort();
-    res.json({
-      success: true,
-      composition: "VideoComments",
-      publicDir: path.join(process.cwd(), "public"),
-      studioUrl: `http://localhost:${port}`,
-      studioProps,
-      studioCommand: `npm run dev -- --port ${port} --props '${JSON.stringify(studioProps)}'`,
-      files: {
-        video: dirInfo.videoFile,
-        comments: dirInfo.commentFile,
-        subtitles: dirInfo.subtitleFiles,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-app.post("/api/jobs/:jobId/open-preview", (req, res) => {
-  const job = loadJob(req.params.jobId);
-  if (!job) {
-    res.status(404).json({ error: "Job not found" });
-    return;
-  }
-
-  try {
-    const dirInfo = buildJobDirInfo(job);
-    preparePublicDir(dirInfo);
-    const studioProps = buildStudioProps(job, dirInfo);
-    const studio = startRemotionStudioPreview(job.id, studioProps);
-    appendJobEvent({
-      jobId: job.id,
-      level: "info",
-      message: "Remotion Studio preview opened",
-      data: { studioUrl: studio.studioUrl, studioProps },
-    });
-    res.json({
-      success: true,
-      composition: "VideoComments",
-      publicDir: path.join(process.cwd(), "public"),
-      studioProps,
-      ...studio,
-      files: {
-        video: dirInfo.videoFile,
-        comments: dirInfo.commentFile,
-        subtitles: dirInfo.subtitleFiles,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
 
 app.post("/api/jobs/:jobId/start", (req, res) => {
   const job = loadJob(req.params.jobId);
@@ -1291,7 +1126,6 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => {
     activeJobRun.abortController?.abort();
     if (currentRender?.taskId === jobId) {
       currentRender.abortController?.abort();
-      terminateRenderProcesses();
     }
     setJobStep(jobId, "cancelled", "completed", { percent: 100 });
     appendJobEvent({
@@ -1320,7 +1154,7 @@ app.delete("/api/jobs/:jobId", (req, res) => {
 
 app.post("/api/jobs/:jobId/download", async (req, res) => {
   try {
-    let job = loadJob(req.params.jobId);
+    const job = loadJob(req.params.jobId);
     if (!job) {
       res.status(404).json({ error: "Job not found" });
       return;
@@ -1381,7 +1215,7 @@ app.post("/api/jobs/:jobId/download", async (req, res) => {
 
 app.post("/api/jobs/:jobId/normalize", (req, res) => {
   try {
-    let job = loadJob(req.params.jobId);
+    const job = loadJob(req.params.jobId);
     if (!job) {
       res.status(404).json({ error: "Job not found" });
       return;
@@ -1764,24 +1598,6 @@ app.post("/api/translate/test", async (req, res) => {
 // Returns: { "outputPath": "/full/system/path/to/output.mp4" }
 // ============================================================
 
-// TEST: Direct openBrowser in Express handler
-app.get("/api/test-browser", async (req, res) => {
-  const fs = await import("fs");
-  try {
-    fs.default.appendFileSync("/tmp/express-ob-test.log", "Handler called\n");
-    const { openBrowser } = await import("@remotion/renderer");
-    fs.default.appendFileSync("/tmp/express-ob-test.log", "Calling openBrowser...\n");
-    const browser = await openBrowser("chrome", { logLevel: "info" });
-    fs.default.appendFileSync("/tmp/express-ob-test.log", "SUCCESS\n");
-    await browser.close({ silent: true });
-    res.json({ success: true });
-  } catch(e) {
-    const message = e instanceof Error ? e.message : String(e);
-    fs.default.appendFileSync("/tmp/express-ob-test.log", "FAIL: " + message.substring(0, 2000) + "\n");
-    res.status(500).json({ error: message.substring(0, 500) });
-  }
-});
-
 app.post("/api/render-folder", async (req, res) => {
   const { folder } = req.body;
   if (!folder || typeof folder !== "string") {
@@ -1821,7 +1637,7 @@ app.post("/api/render-folder", async (req, res) => {
     if (isSSERequest(req)) {
       const sse = setupSSE(res);
       try {
-        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; sse.sendProgress(p); }, abortController.signal);
+        const result = await renderWithFFmpeg(dir, (p) => { if (currentRender) currentRender.progress = p; sse.sendProgress(p); }, abortController.signal);
         const outputPath = path.resolve(process.cwd(), result.output);
         console.log(`[Agent API] Done: ${outputPath}`);
         updateTask(taskId, { renderStatus: "completed" });
@@ -1840,7 +1656,7 @@ app.post("/api/render-folder", async (req, res) => {
       sse.end();
     } else {
       try {
-        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; }, abortController.signal);
+        const result = await renderWithFFmpeg(dir, (p) => { if (currentRender) currentRender.progress = p; }, abortController.signal);
         const outputPath = path.resolve(process.cwd(), result.output);
         console.log(`[Agent API] Done: ${outputPath}`);
         updateTask(taskId, { renderStatus: "completed" });
@@ -1862,20 +1678,6 @@ app.post("/api/render-folder", async (req, res) => {
   }
 });
 
-// Prepare public dir for Remotion Studio preview
-app.post("/api/prepare/:dirName", (_req, res) => {
-  const dir = getDirByName(_req.params.dirName);
-  if (!dir) {
-    res.status(404).json({ error: "目录不存在" });
-    return;
-  }
-  try {
-    preparePublicDir(dir);
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || String(err) });
-  }
-});
 
 // Get available directories
 app.get("/api/dirs", (_req, res) => {
@@ -1953,7 +1755,7 @@ app.post("/api/render/:dirName", async (req, res) => {
     if (isSSERequest(req)) {
       const sse = setupSSE(res);
       try {
-        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; sse.sendProgress(p); }, abortController.signal);
+        const result = await renderWithFFmpeg(dir, (p) => { if (currentRender) currentRender.progress = p; sse.sendProgress(p); }, abortController.signal);
         updateTask(taskId, { renderStatus: "completed" });
         sse.sendEvent("done", { success: true, output: result.output, durationSec: result.durationSec });
       } catch (err: any) {
@@ -1968,7 +1770,7 @@ app.post("/api/render/:dirName", async (req, res) => {
       sse.end();
     } else {
       try {
-        const result = await render(dir, (p) => { if (currentRender) currentRender.progress = p; }, abortController.signal);
+        const result = await renderWithFFmpeg(dir, (p) => { if (currentRender) currentRender.progress = p; }, abortController.signal);
         updateTask(taskId, { renderStatus: "completed" });
         res.json({ success: true, output: result.output, durationSec: result.durationSec });
       } catch (err: any) {

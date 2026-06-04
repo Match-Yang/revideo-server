@@ -5,7 +5,7 @@
 Revideo Server 是一个视频渲染与发布服务，提供以下功能：
 
 - **目录管理** — 浏览 `~/Movies` 下的视频目录
-- **视频渲染** — 基于 Remotion 将视频评论渲染为成品视频
+- **视频渲染** — 基于 FFmpeg 将视频、字幕和评论渲染为成品视频
 - **视频发布** — 自动化发布到 B站、抖音
 - **任务管理** — 追踪视频从下载、翻译、渲染到发布的完整生命周期
 
@@ -59,29 +59,7 @@ curl http://localhost:3001/api/dirs
 
 ---
 
-### 1.2 准备预览目录
-
-将指定目录的视频、字幕、评论文件复制到工作目录，用于 Remotion Studio 预览。
-
-```
-POST /api/prepare/:dirName
-```
-
-**示例**:
-
-```bash
-curl -X POST http://localhost:3001/api/prepare/my-video-1
-```
-
-**成功响应**:
-
-```json
-{ "success": true }
-```
-
----
-
-### 1.3 预览源视频
+### 1.2 预览源视频
 
 以流式方式返回指定目录中的原始视频文件。
 
@@ -239,10 +217,7 @@ JSON 模式成功响应也是同样的 `{ "outputPath": "..." }` 格式。
 |------|-----------|------|
 | `preparing` | 0% | 复制视频、字幕、评论文件到工作目录 |
 | `downloading-avatars` | 3% | 下载评论者头像 |
-| `bundling` | 5% | 打包 Remotion 项目（Webpack） |
-| `rendering` | 8%-95% | 渲染帧（`encodedFrames=0` 时） |
-| `encoding` | 8%-95% | 编码视频（`encodedFrames>0` 时） |
-| `muxing` | 8%-95% | 合成音轨 |
+| `rendering` | 8%-95% | FFmpeg 渲染、编码并合成视频 |
 | `extracting-cover` | 96% | 用 ffmpeg 提取封面图 |
 | `done` | 100% | 全部完成 |
 

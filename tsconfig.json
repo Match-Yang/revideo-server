@@ -2,7 +2,6 @@
   "compilerOptions": {
     "target": "ES2018",
     "module": "commonjs",
-    "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
     "lib": ["es2015", "dom"],
@@ -11,5 +10,5 @@
     "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": true
   },
-  "exclude": ["remotion.config.ts", "src/render.ts", "src/scan-dir.ts"]
+  "exclude": ["src/scan-dir.ts"]
 }

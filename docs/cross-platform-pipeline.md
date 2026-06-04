@@ -18,7 +18,7 @@ The first implemented path remains YouTube/Shorts as a source and Bilibili/Douyi
 - Probes source URLs and downloads source assets.
 - Normalizes metadata, subtitles, comments, and media files into a canonical job directory.
 - Runs translation through an OpenAI-compatible provider.
-- Runs rendering through Remotion.
+- Runs rendering through FFmpeg.
 - Manages browser/CDP startup, profile directories, and platform preflight checks.
 - Publishes to target platforms through publisher adapters.
 - Provides a management panel for humans and APIs for agents.

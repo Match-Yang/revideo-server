@@ -379,31 +379,7 @@ curl http://localhost:3001/api/jobs/queue
 
 ---
 
-## 5. 预览
-
-### 准备预览（不打开 Studio）
-
-```
-POST /api/jobs/:jobId/prepare-preview
-```
-
-```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/prepare-preview
-```
-
-### 打开预览（启动 Remotion Studio）
-
-```
-POST /api/jobs/:jobId/open-preview
-```
-
-```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/open-preview
-```
-
----
-
-## 6. 源视频探测
+## 5. 源视频探测
 
 ### 探测 URL
 

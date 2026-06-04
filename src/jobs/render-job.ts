@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { DirInfo } from "../types";
-import { render, renderWithFFmpeg, type RenderProgress } from "../renderer";
+import { renderWithFFmpeg, type RenderProgress } from "../renderer";
 import type { RevideoJob } from "./types";
 import type { RevideoSettings } from "../settings";
 
@@ -74,14 +74,11 @@ export async function renderJob(
   const useComments = job.options.renderComments !== undefined
     ? job.options.renderComments
     : settings.production?.renderComments !== false;
-  const renderEngine = process.env.REVIDEO_RENDER_ENGINE || "ffmpeg";
-  const result = useComments && renderEngine === "remotion"
-    ? await render(dirInfo, onProgress, signal)
-    : await renderWithFFmpeg(
-        useComments ? dirInfo : { ...dirInfo, commentFile: undefined },
-        onProgress,
-        signal,
-      );
+  const result = await renderWithFFmpeg(
+    useComments ? dirInfo : { ...dirInfo, commentFile: undefined },
+    onProgress,
+    signal,
+  );
   const outputPath = path.resolve(process.cwd(), result.output);
   const coverPath = path.resolve(process.cwd(), "out", `${job.id}-cover.jpg`);
 

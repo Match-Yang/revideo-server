@@ -1,6 +1,6 @@
 # Revideo Server
 
-Video rendering, workflow, and publishing service built on Remotion.
+Video rendering, workflow, and publishing service built on FFmpeg.
 
 The project is being migrated from a YouTube-to-Bilibili helper into a platform-neutral reposting pipeline:
 
@@ -16,12 +16,6 @@ See [docs/cross-platform-pipeline.md](docs/cross-platform-pipeline.md) for the t
 
 ```console
 npm i
-```
-
-**Start Preview**
-
-```console
-npm run dev
 ```
 
 **Start API and management panel**
@@ -48,16 +42,10 @@ TRANSLATE_THINKING_TYPE=disabled
 
 Translation safety is handled as model review plus Chinese post-scan. Source text is not locally pre-scanned because comments and subtitles may be in any language, including normal Chinese comments.
 
-**Render video**
+**Restart API and management panel**
 
 ```console
-npx remotion render
-```
-
-**Upgrade Remotion**
-
-```console
-npx remotion upgrade
+npm run restart:ui
 ```
 
 ## APIs
@@ -74,4 +62,4 @@ New cross-platform job APIs include:
 - `POST /api/browser/start`
 - `GET /api/translate/providers`
 
-The old APIs remain available during migration.
+Legacy folder rendering APIs remain available for local task folders.

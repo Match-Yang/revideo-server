@@ -22,7 +22,7 @@ if [[ -n "${PIDS}" ]]; then
 fi
 
 echo "[restart-ui] starting server, log: ${LOG_FILE}"
-nohup npx tsx src/server.ts >"${LOG_FILE}" 2>&1 &
+nohup node --import tsx src/server.ts >"${LOG_FILE}" 2>&1 </dev/null &
 
 for _ in {1..20}; do
   if curl -fsS "http://localhost:${PORT}/" >/dev/null 2>&1; then
