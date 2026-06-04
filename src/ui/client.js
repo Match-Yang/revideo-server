@@ -1,5 +1,92 @@
 const platforms = ["bilibili", "douyin", "youtube", "tiktok", "xiaohongshu"];
 
+const platformNames = {
+  bilibili: "B站",
+  douyin: "抖音",
+  youtube: "YouTube",
+  tiktok: "TikTok",
+  xiaohongshu: "小红书",
+};
+
+const languages = [
+  ["zh-CN", "中文（简体）"],
+  ["zh-TW", "中文（繁体）"],
+  ["en", "英语"],
+  ["ja", "日语"],
+  ["ko", "韩语"],
+  ["fr", "法语"],
+  ["de", "德语"],
+  ["es", "西班牙语"],
+  ["pt", "葡萄牙语"],
+  ["it", "意大利语"],
+  ["ru", "俄语"],
+  ["ar", "阿拉伯语"],
+  ["hi", "印地语"],
+  ["bn", "孟加拉语"],
+  ["pa", "旁遮普语"],
+  ["jv", "爪哇语"],
+  ["ms", "马来语"],
+  ["id", "印尼语"],
+  ["tl", "他加禄语"],
+  ["vi", "越南语"],
+  ["th", "泰语"],
+  ["my", "缅甸语"],
+  ["km", "高棉语"],
+  ["lo", "老挝语"],
+  ["ne", "尼泊尔语"],
+  ["si", "僧伽罗语"],
+  ["ta", "泰米尔语"],
+  ["te", "泰卢固语"],
+  ["mr", "马拉地语"],
+  ["gu", "古吉拉特语"],
+  ["kn", "卡纳达语"],
+  ["ml", "马拉雅拉姆语"],
+  ["or", "奥里亚语"],
+  ["ur", "乌尔都语"],
+  ["fa", "波斯语"],
+  ["tr", "土耳其语"],
+  ["pl", "波兰语"],
+  ["uk", "乌克兰语"],
+  ["nl", "荷兰语"],
+  ["sv", "瑞典语"],
+  ["no", "挪威语"],
+  ["da", "丹麦语"],
+  ["fi", "芬兰语"],
+  ["el", "希腊语"],
+  ["cs", "捷克语"],
+  ["sk", "斯洛伐克语"],
+  ["hu", "匈牙利语"],
+  ["ro", "罗马尼亚语"],
+  ["bg", "保加利亚语"],
+  ["hr", "克罗地亚语"],
+  ["sr", "塞尔维亚语"],
+  ["sl", "斯洛文尼亚语"],
+  ["et", "爱沙尼亚语"],
+  ["lv", "拉脱维亚语"],
+  ["lt", "立陶宛语"],
+  ["he", "希伯来语"],
+  ["ka", "格鲁吉亚语"],
+  ["hy", "亚美尼亚语"],
+  ["az", "阿塞拜疆语"],
+  ["uz", "乌兹别克语"],
+  ["kk", "哈萨克语"],
+  ["mn", "蒙古语"],
+  ["sw", "斯瓦希里语"],
+  ["am", "阿姆哈拉语"],
+  ["yo", "约鲁巴语"],
+  ["ig", "伊博语"],
+  ["ha", "豪萨语"],
+  ["zu", "祖鲁语"],
+  ["af", "南非荷兰语"],
+  ["eu", "巴斯克语"],
+  ["ca", "加泰罗尼亚语"],
+  ["gl", "加利西亚语"],
+  ["is", "冰岛语"],
+  ["ga", "爱尔兰语"],
+  ["cy", "威尔士语"],
+  ["mt", "马耳他语"],
+];
+
 const state = {
   page: localStorage.getItem("uiPage") || "overview",
   jobs: [],
@@ -39,6 +126,11 @@ const el = {
   browserPanel: document.getElementById("browserPanel"),
   startBrowserBtn: document.getElementById("startBrowserBtn"),
   toast: document.getElementById("toast"),
+  sidebarStatus: document.getElementById("sidebarStatus"),
+  topbarTitle: document.getElementById("topbarTitle"),
+  topbarSubtitle: document.getElementById("topbarSubtitle"),
+  topCreateTaskBtn: document.getElementById("topCreateTaskBtn"),
+  topRefreshBtn: document.getElementById("topRefreshBtn"),
 };
 
 const stepLabels = {
@@ -264,6 +356,14 @@ function switchPage(page) {
   localStorage.setItem("uiPage", page);
   el.navItems.forEach((item) => item.classList.toggle("active", item.dataset.page === page));
   el.pages.forEach((view) => view.classList.toggle("hidden", view.dataset.view !== page));
+  const titles = {
+    overview: ["系统纵览", "队列健康、失败任务和发布吞吐"],
+    tasks: ["任务工作台", "创建、筛选和排查发布任务"],
+    settings: ["系统设置", "下载、翻译、发布和浏览器策略"],
+  };
+  const [title, subtitle] = titles[page] || titles.overview;
+  el.topbarTitle.textContent = title;
+  el.topbarSubtitle.textContent = subtitle;
 }
 
 function reconcileSelectedJob() {
@@ -291,6 +391,12 @@ async function refreshAll(options = {}) {
   if (full) renderAll();
   else renderChanged();
   el.updatedAt.textContent = `刷新 ${new Date().toLocaleTimeString()}`;
+  if (el.sidebarStatus) {
+    const failed = state.jobs.filter((job) => derivedStatus(job) === "failed").length;
+    const running = state.jobs.filter((job) => ["running", "publishing"].includes(derivedStatus(job))).length;
+    el.sidebarStatus.textContent = failed ? `${failed} 异常` : running ? `${running} 运行` : "正常";
+    el.sidebarStatus.className = `badge ${failed ? "badge-error" : running ? "badge-info" : "badge-success"}`;
+  }
 }
 
 function renderAll() {
@@ -378,14 +484,14 @@ function renderOverview() {
     ["completed", "已完成", completed, "来源/目标平台分布"],
     ["failed", "异常", failed, "失败步骤分布"],
   ];
-  el.overviewCards.innerHTML = cards.map(([key, label, value, hint], index) => `
-    <article class="card overview-card ${index === 1 ? "active" : ""}">
+  el.overviewCards.innerHTML = cards.map(([key, label, value, hint]) => `
+    <article class="card overview-card ${state.overviewBreakdown === key ? "active" : ""}" data-breakdown="${key}">
       <div class="card-body">
         <div class="metric-label">${label}</div>
         <div class="metric-value">${value}</div>
         <div class="metric-hint">${hint}</div>
         <div class="card-actions mt-2">
-          <button data-breakdown="${key}" class="btn btn-sm ${index === 1 ? "btn-primary" : "btn-outline"}">查看分布</button>
+          <button data-breakdown="${key}" class="btn btn-sm ${state.overviewBreakdown === key ? "btn-primary" : "btn-outline"}">查看分布</button>
         </div>
       </div>
     </article>
@@ -425,8 +531,8 @@ function renderOverviewBreakdown() {
     title = key === "completed" ? "已完成来源和目标分布" : "总任务来源和目标分布";
     const base = key === "completed" ? state.jobs.filter((job) => derivedStatus(job) === "completed") : state.jobs;
     rows = [
-      ...Object.entries(groupCount(base, (job) => `来源: ${job.source?.platform || "-"}`)),
-      ...Object.entries(groupCount(base.flatMap((job) => job.targets || []), (target) => `目标: ${target.platform}`)),
+      ...Object.entries(groupCount(base, (job) => `来源: ${platformNames[job.source?.platform] || job.source?.platform || "-"}`)),
+      ...Object.entries(groupCount(base.flatMap((job) => job.targets || []), (target) => `目标: ${platformNames[target.platform] || target.platform}`)),
     ];
   }
   el.overviewBreakdown.innerHTML = `
@@ -451,7 +557,7 @@ function selectedTargetPlatforms() {
 
 function updateTargetDropdownLabel() {
   const selected = selectedTargetPlatforms();
-  el.targetDropdownLabel.textContent = selected.length ? `目标平台: ${selected.join(", ")}` : "选择目标平台";
+  el.targetDropdownLabel.textContent = selected.length ? `目标平台: ${selected.map((p) => platformNames[p] || p).join(", ")}` : "选择目标平台";
 }
 
 function renderCreateTask() {
@@ -459,7 +565,7 @@ function renderCreateTask() {
   el.targetPlatformChoices.innerHTML = platforms.map((platform) => `
     <label class="choice">
       <input type="checkbox" name="targetPlatform" value="${platform}" ${defaults.includes(platform) ? "checked" : ""}>
-      <span>${platform}</span>
+      <span>${platformNames[platform] || platform}</span>
     </label>
   `).join("");
   updateTargetDropdownLabel();
@@ -539,10 +645,10 @@ function stepDetail(job, events, step) {
     return `<dl class="detail-dl"><dt>重复次数</dt><dd>${job.options?.repeatTimes || 1}</dd><dt>使用素材</dt><dd class="break-all">${escapeHtml(job.artifacts?.sourceDir || "-")}</dd><dt>输出文件</dt><dd class="break-all">${escapeHtml(job.artifacts?.outputVideo || "-")}</dd></dl>`;
   }
   if (step === "generating-platform-drafts") {
-    return `<div class="detail-stack">${(job.targets || []).map((target) => `<div class="info-tile">${badge(target.platform)} <span class="break-all info-value">${escapeHtml(JSON.stringify(target.draft || {}))}</span></div>`).join("") || "<div class=\"empty-state\">暂无草稿</div>"}</div>`;
+    return `<div class="detail-stack">${(job.targets || []).map((target) => `<div class="info-tile">${badge(platformNames[target.platform] || target.platform)} <span class="break-all info-value">${escapeHtml(JSON.stringify(target.draft || {}))}</span></div>`).join("") || "<div class=\"empty-state\">暂无草稿</div>"}</div>`;
   }
   if (step === "preflighting-targets" || step === "publishing-targets") {
-    return `<div class="detail-stack">${(job.targets || []).map((target) => `<div class="info-tile">${badge(target.platform)} ${badge(target.status, target.status === "failed" ? "failed" : "default")} <span class="break-all info-value">${escapeHtml(target.error || target.result?.url || "")}</span></div>`).join("") || "<div class=\"empty-state\">暂无发布目标</div>"}</div>`;
+    return `<div class="detail-stack">${(job.targets || []).map((target) => `<div class="info-tile">${badge(platformNames[target.platform] || target.platform)} ${badge(target.status, target.status === "failed" ? "failed" : "default")} <span class="break-all info-value">${escapeHtml(target.error || target.result?.url || "")}</span></div>`).join("") || "<div class=\"empty-state\">暂无发布目标</div>"}</div>`;
   }
   return `<ul style="margin:0;padding-left:18px;color:var(--muted);font-size:13px;">${commonEvents}</ul>`;
 }
@@ -581,12 +687,12 @@ async function renderJobDetail() {
     <div class="detail-summary">
       <div class="detail-id">${escapeHtml(job.id)}</div>
       <h4 class="detail-title">${escapeHtml(job.source?.metadata?.title || job.id)}</h4>
-      <div class="detail-subtitle">${escapeHtml(job.source?.platform || "-")}</div>
+      <div class="detail-subtitle">${escapeHtml(platformNames[job.source?.platform] || job.source?.platform || "-")}</div>
       <div class="detail-actions">${actionHtml}</div>
     </div>
     <div class="detail-metrics">
       <div class="info-tile"><div class="info-label">当前状态</div><div class="info-value">${badge(statusLabel(derivedStatus(job)), statusKind(derivedStatus(job)))}</div></div>
-      <div class="info-tile"><div class="info-label">目标平台</div><div class="info-value flex flex-wrap gap-2">${(job.targets || []).map((target) => badge(target.platform)).join("") || "-"}</div></div>
+      <div class="info-tile"><div class="info-label">目标平台</div><div class="info-value flex flex-wrap gap-2">${(job.targets || []).map((target) => badge(platformNames[target.platform] || target.platform)).join("") || "-"}</div></div>
       <div class="info-tile"><div class="info-label">重复/评论</div><div class="info-value">重复 ${job.options?.repeatTimes || 1} 次，目标评论 ${job.options?.targetCommentCount ?? "-"}</div></div>
       <div class="info-tile"><div class="info-label">输出视频</div><div class="info-value break-all">${escapeHtml(job.artifacts?.outputVideo || "-")}</div></div>
     </div>
@@ -626,13 +732,20 @@ async function renderJobDetail() {
 
 function renderSettings() {
   if (!state.settings) return;
+
+  // Populate language dropdown
+  const langSelect = el.settingsForm.elements["translation.targetLanguage"];
+  const currentLang = state.settings.production?.subtitleTargetLanguage || state.settings.production?.commentTargetLanguage || "zh-CN";
+  langSelect.innerHTML = languages.map(([code, name]) =>
+    `<option value="${code}" ${code === currentLang ? "selected" : ""}>${name}</option>`
+  ).join("");
+
   [...el.settingsForm.elements].forEach((control) => {
     if (!control.name || control.type === "checkbox" || control.name.startsWith("translation.")) return;
     const value = getPath(state.settings, control.name);
     if (value !== undefined) control.value = String(value);
   });
-  el.settingsForm.elements["translation.targetLanguage"].value =
-    state.settings.production?.subtitleTargetLanguage || state.settings.production?.commentTargetLanguage || "zh-CN";
+  el.settingsForm.elements["translation.targetLanguage"].value = currentLang;
   el.settingsForm.elements["translation.retranslateTargetLanguage"].value =
     String(Boolean(state.settings.production?.subtitleRetranslateTargetLanguage || state.settings.production?.commentRetranslateTargetLanguage));
   el.settingsForm.elements["translation.bilingualSubtitles"].value =
@@ -642,13 +755,10 @@ function renderSettings() {
   el.settingsForm.elements["translation.commentPrompt"].value =
     state.settings.production?.commentPrompt || "";
 
-  const defaults = state.settings.publishing?.defaultPlatforms || [];
-  el.defaultPlatformSettings.innerHTML = platforms.map((platform) => `
-    <label class="choice" style="border:1px solid var(--border);">
-      <input type="checkbox" name="publishing.defaultPlatforms" value="${platform}" ${defaults.includes(platform) ? "checked" : ""}>
-      <span>${platform}</span>
-    </label>
-  `).join("");
+  const defaults = state.settings?.publishing?.defaultPlatforms || [];
+  el.defaultPlatformSettings.innerHTML = platforms.map((platform) =>
+    `<label class="choice"><input type="checkbox" value="${platform}" ${defaults.includes(platform) ? "checked" : ""}><span>${platformNames[platform] || platform}</span></label>`
+  ).join("");
 }
 
 function renderBrowser() {
@@ -679,7 +789,7 @@ function collectSettings() {
     setPath(next, control.name, value);
   });
   next.publishing ||= {};
-  next.publishing.defaultPlatforms = [...el.settingsForm.querySelectorAll('input[name="publishing.defaultPlatforms"]:checked')].map((item) => item.value);
+  next.publishing.defaultPlatforms = [...el.defaultPlatformSettings.querySelectorAll("input:checked")].map((input) => input.value);
 
   const targetLanguage = el.settingsForm.elements["translation.targetLanguage"].value || "zh-CN";
   const retranslate = el.settingsForm.elements["translation.retranslateTargetLanguage"].value === "true";
@@ -711,6 +821,25 @@ el.navItems.forEach((item) => item.addEventListener("click", () => {
   renderChanged();
 }));
 
+el.topRefreshBtn.addEventListener("click", async () => {
+  el.topRefreshBtn.disabled = true;
+  try {
+    await refreshAll({ full: false });
+    toast("已刷新");
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    el.topRefreshBtn.disabled = false;
+  }
+});
+
+el.topCreateTaskBtn.addEventListener("click", () => {
+  switchPage("tasks");
+  renderChanged();
+  document.getElementById("createTaskPanel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.sourceUrlInput.focus();
+});
+
 
 el.refreshJobsBtn.addEventListener("click", () => refreshAll({ full: false }).catch((err) => toast(err.message)));
 el.pauseAllBtn.addEventListener("click", async () => {
@@ -735,7 +864,7 @@ el.overviewCards.addEventListener("click", (event) => {
   const buttonEl = event.target.closest("[data-breakdown]");
   if (!buttonEl) return;
   state.overviewBreakdown = buttonEl.dataset.breakdown;
-  renderOverviewBreakdown();
+  renderOverview();
 });
 
 el.recentFailures.addEventListener("click", async (event) => {
