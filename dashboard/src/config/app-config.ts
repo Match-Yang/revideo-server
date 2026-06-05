@@ -7,8 +7,7 @@ export const APP_CONFIG = {
   version: packageJson.version,
   copyright: `© ${currentYear}, Revideo.`,
   meta: {
-    title: "Revideo Console",
-    description:
-      "A workflow console for source download, translation, rendering, publishing, and browser operations.",
+    title: "Revideo 控制台",
+    description: "用于下载、翻译、渲染、发布和浏览器自动化的工作流控制台。",
   },
 };

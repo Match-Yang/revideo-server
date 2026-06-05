@@ -18,12 +18,15 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { useI18n } from "@/i18n/i18n-provider";
 import type { NavMainItem } from "@/navigation/sidebar/sidebar-items";
 import { sidebarItems } from "@/navigation/sidebar/sidebar-items";
 
 type SearchItem = {
   group: string;
+  groupKey?: string;
   label: string;
+  labelKey?: string;
   url: string;
   icon?: NavMainItem["icon"];
   disabled?: boolean;
@@ -32,16 +35,20 @@ type SearchItem = {
 
 const sidebarGroupLabels = new Set(sidebarItems.flatMap((group) => (group.label ? [group.label] : [])));
 
-function getSubItemGroup(groupLabel: string | undefined, itemTitle: string) {
-  return sidebarGroupLabels.has(itemTitle) ? (groupLabel ?? "Other") : itemTitle;
+function getSubItemGroup(groupLabel: string | undefined, groupKey: string | undefined, item: NavMainItem) {
+  if (sidebarGroupLabels.has(item.title)) {
+    return { group: groupLabel ?? "Other", groupKey };
+  }
+  return { group: item.title, groupKey: item.titleKey };
 }
 
 const searchItems: SearchItem[] = sidebarItems.flatMap((group) =>
   group.items.flatMap((item) => {
     if (item.subItems) {
       return item.subItems.map((sub) => ({
-        group: getSubItemGroup(group.label, item.title),
+        ...getSubItemGroup(group.label, group.labelKey, item),
         label: sub.title,
+        labelKey: sub.titleKey,
         url: sub.url,
         icon: item.icon,
         disabled: sub.comingSoon,
@@ -51,7 +58,9 @@ const searchItems: SearchItem[] = sidebarItems.flatMap((group) =>
     return [
       {
         group: group.label ?? "Other",
+        groupKey: group.labelKey,
         label: item.title,
+        labelKey: item.titleKey,
         url: item.url,
         icon: item.icon,
         disabled: item.comingSoon,
@@ -79,6 +88,7 @@ export function SearchDialog() {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const router = useRouter();
+  const { t } = useI18n();
 
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -110,20 +120,20 @@ export function SearchDialog() {
     groupBy(items).map(({ group, items: groupItems }, index) => (
       <React.Fragment key={group}>
         {index > 0 && <CommandSeparator />}
-        <CommandGroup heading={group}>
+        <CommandGroup heading={t(groupItems[0]?.groupKey || "") || group}>
           {groupItems.map((item) => (
             <CommandItem
               disabled={item.disabled}
               key={`${group}-${item.url}-${item.label}`}
-              value={`${item.group} ${item.label}`}
+              value={`${item.group} ${item.label} ${item.groupKey || ""} ${item.labelKey || ""}`}
               onSelect={() => handleSelect(item)}
             >
               {item.icon && <item.icon />}
-              <span>{item.label}</span>
+              <span>{item.labelKey ? t(item.labelKey) : item.label}</span>
 
               {item.disabled && (
                 <Badge variant="outline" className="text-xs">
-                  Soon
+                  {t("sidebar.soon")}
                 </Badge>
               )}
             </CommandItem>
@@ -140,16 +150,16 @@ export function SearchDialog() {
         className="px-0! font-normal text-muted-foreground hover:no-underline"
       >
         <Search data-icon="inline-start" />
-        Search
+        {t("sidebar.searchButton")}
         <kbd className="inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-medium text-[10px]">
           <span className="text-xs">⌘</span>J
         </kbd>
       </Button>
       <CommandDialog open={open} onOpenChange={handleOpenChange}>
         <Command>
-          <CommandInput placeholder="Search jobs, settings, queue, and system tools..." value={query} onValueChange={setQuery} />
+          <CommandInput placeholder={t("sidebar.searchPlaceholder")} value={query} onValueChange={setQuery} />
           <CommandList>
-            <CommandEmpty>No results found.</CommandEmpty>
+            <CommandEmpty>{t("sidebar.noResults")}</CommandEmpty>
             {query ? renderGroups(searchItems) : renderGroups(recommendations)}
           </CommandList>
         </Command>

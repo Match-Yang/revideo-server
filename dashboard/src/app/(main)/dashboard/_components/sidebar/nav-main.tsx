@@ -25,15 +25,17 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { useI18n } from "@/i18n/i18n-provider";
 import type { NavGroup, NavMainItem } from "@/navigation/sidebar/sidebar-items";
 
 interface NavMainProps {
   readonly items: readonly NavGroup[];
 }
 
-const IsComingSoon = () => (
-  <span className="ml-auto rounded-md bg-gray-200 px-2 py-1 text-xs dark:text-gray-800">Soon</span>
-);
+const IsComingSoon = () => {
+  const { t } = useI18n();
+  return <span className="ml-auto rounded-md bg-gray-200 px-2 py-1 text-xs dark:text-gray-800">{t("sidebar.soon")}</span>;
+};
 
 const NavItemExpanded = ({
   item,
@@ -44,6 +46,9 @@ const NavItemExpanded = ({
   isActive: (url: string, subItems?: NavMainItem["subItems"]) => boolean;
   isSubmenuOpen: (subItems?: NavMainItem["subItems"]) => boolean;
 }) => {
+  const { t } = useI18n();
+  const label = item.titleKey ? t(item.titleKey) : item.title;
+
   return (
     <Collapsible key={item.title} asChild defaultOpen={isSubmenuOpen(item.subItems)} className="group/collapsible">
       <SidebarMenuItem>
@@ -52,10 +57,10 @@ const NavItemExpanded = ({
             <SidebarMenuButton
               disabled={item.comingSoon}
               isActive={isActive(item.url, item.subItems)}
-              tooltip={item.title}
+              tooltip={label}
             >
               {item.icon && <item.icon />}
-              <span>{item.title}</span>
+              <span>{label}</span>
               {item.comingSoon && <IsComingSoon />}
               <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
             </SidebarMenuButton>
@@ -64,11 +69,11 @@ const NavItemExpanded = ({
               asChild
               aria-disabled={item.comingSoon}
               isActive={isActive(item.url)}
-              tooltip={item.title}
+              tooltip={label}
             >
               <Link prefetch={false} href={item.url} target={item.newTab ? "_blank" : undefined}>
                 {item.icon && <item.icon />}
-                <span>{item.title}</span>
+                <span>{label}</span>
                 {item.comingSoon && <IsComingSoon />}
               </Link>
             </SidebarMenuButton>
@@ -82,7 +87,7 @@ const NavItemExpanded = ({
                   <SidebarMenuSubButton aria-disabled={subItem.comingSoon} isActive={isActive(subItem.url)} asChild>
                     <Link prefetch={false} href={subItem.url} target={subItem.newTab ? "_blank" : undefined}>
                       {subItem.icon && <subItem.icon />}
-                      <span>{subItem.title}</span>
+                      <span>{subItem.titleKey ? t(subItem.titleKey) : subItem.title}</span>
                       {subItem.comingSoon && <IsComingSoon />}
                     </Link>
                   </SidebarMenuSubButton>
@@ -103,17 +108,20 @@ const NavItemCollapsed = ({
   item: NavMainItem;
   isActive: (url: string, subItems?: NavMainItem["subItems"]) => boolean;
 }) => {
+  const { t } = useI18n();
+  const label = item.titleKey ? t(item.titleKey) : item.title;
+
   return (
     <SidebarMenuItem key={item.title}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <SidebarMenuButton
             disabled={item.comingSoon}
-            tooltip={item.title}
+            tooltip={label}
             isActive={isActive(item.url, item.subItems)}
           >
             {item.icon && <item.icon />}
-            <span>{item.title}</span>
+            <span>{label}</span>
             <ChevronRight />
           </SidebarMenuButton>
         </DropdownMenuTrigger>
@@ -129,7 +137,7 @@ const NavItemCollapsed = ({
               >
                 <Link prefetch={false} href={subItem.url} target={subItem.newTab ? "_blank" : undefined}>
                   {subItem.icon && <subItem.icon className="[&>svg]:text-sidebar-foreground" />}
-                  <span>{subItem.title}</span>
+                  <span>{subItem.titleKey ? t(subItem.titleKey) : subItem.title}</span>
                   {subItem.comingSoon && <IsComingSoon />}
                 </Link>
               </SidebarMenuSubButton>
@@ -144,6 +152,7 @@ const NavItemCollapsed = ({
 export function NavMain({ items }: NavMainProps) {
   const path = usePathname();
   const { state, isMobile } = useSidebar();
+  const { t } = useI18n();
 
   const isItemActive = (url: string, subItems?: NavMainItem["subItems"]) => {
     if (subItems?.length) {
@@ -164,12 +173,12 @@ export function NavMain({ items }: NavMainProps) {
             <SidebarMenuItem className="flex items-center gap-2">
               <SidebarMenuButton
                 asChild
-                tooltip="Quick Create"
+                tooltip={t("sidebar.newSource")}
                 className="min-w-8 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground"
               >
                 <Link prefetch={false} href="/dashboard/jobs">
                   <PlusCircleIcon />
-                  <span>New Source</span>
+                  <span>{t("sidebar.newSource")}</span>
                 </Link>
               </SidebarMenuButton>
               <Button
@@ -180,7 +189,7 @@ export function NavMain({ items }: NavMainProps) {
               >
                 <Link prefetch={false} href="/dashboard/queue">
                   <MailIcon />
-                  <span className="sr-only">Queue</span>
+                  <span className="sr-only">{t("sidebar.queueShortcut")}</span>
                 </Link>
               </Button>
             </SidebarMenuItem>
@@ -189,7 +198,7 @@ export function NavMain({ items }: NavMainProps) {
       </SidebarGroup>
       {items.map((group) => (
         <SidebarGroup key={group.id}>
-          {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
+          {group.label && <SidebarGroupLabel>{group.labelKey ? t(group.labelKey) : group.label}</SidebarGroupLabel>}
           <SidebarGroupContent className="flex flex-col gap-2">
             <SidebarMenu>
               {group.items.map((item) => {
@@ -201,12 +210,12 @@ export function NavMain({ items }: NavMainProps) {
                         <SidebarMenuButton
                           asChild
                           aria-disabled={item.comingSoon}
-                          tooltip={item.title}
+                          tooltip={item.titleKey ? t(item.titleKey) : item.title}
                           isActive={isItemActive(item.url)}
                         >
                           <Link prefetch={false} href={item.url} target={item.newTab ? "_blank" : undefined}>
                             {item.icon && <item.icon />}
-                            <span>{item.title}</span>
+                            <span>{item.titleKey ? t(item.titleKey) : item.title}</span>
                           </Link>
                         </SidebarMenuButton>
                       </SidebarMenuItem>

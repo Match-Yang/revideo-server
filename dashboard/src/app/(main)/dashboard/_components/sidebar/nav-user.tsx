@@ -13,18 +13,23 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
+import { useI18n } from "@/i18n/i18n-provider";
 import { getInitials } from "@/lib/utils";
 
 export function NavUser({
   user,
 }: {
-  readonly user: {
-    readonly name: string;
-    readonly email: string;
-    readonly avatar: string;
-  };
-}) {
-  const { isMobile } = useSidebar();
+	  readonly user: {
+	    readonly name: string;
+	    readonly email: string;
+	    readonly avatar: string;
+	    readonly id?: string;
+	    readonly role?: string;
+	  };
+	}) {
+	  const { isMobile } = useSidebar();
+	  const { t } = useI18n();
+	  const displayName = user.id === "publisher" ? t("sidebar.publisher") : t("sidebar.operator");
 
   return (
     <SidebarMenu>
@@ -36,11 +41,11 @@ export function NavUser({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="h-8 w-8 rounded-lg grayscale">
-                <AvatarImage src={user.avatar || undefined} alt={user.name} />
-                <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
+	                <AvatarImage src={user.avatar || undefined} alt={displayName} />
+	                <AvatarFallback className="rounded-lg">{getInitials(displayName)}</AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">{user.name}</span>
+	                <span className="truncate font-medium">{displayName}</span>
                 <span className="truncate text-muted-foreground text-xs">{user.email}</span>
               </div>
               <EllipsisVertical className="ml-auto size-4" />
@@ -55,11 +60,11 @@ export function NavUser({
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="h-8 w-8 rounded-lg">
-                  <AvatarImage src={user.avatar || undefined} alt={user.name} />
-                  <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
+	                  <AvatarImage src={user.avatar || undefined} alt={displayName} />
+	                  <AvatarFallback className="rounded-lg">{getInitials(displayName)}</AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">{user.name}</span>
+	                  <span className="truncate font-medium">{displayName}</span>
                   <span className="truncate text-muted-foreground text-xs">{user.email}</span>
                 </div>
               </div>
@@ -68,21 +73,21 @@ export function NavUser({
             <DropdownMenuGroup>
               <DropdownMenuItem>
                 <CircleUser />
-                Account
+                {t("sidebar.account")}
               </DropdownMenuItem>
               <DropdownMenuItem>
                 <CreditCard />
-                Billing
+                {t("sidebar.billing")}
               </DropdownMenuItem>
               <DropdownMenuItem>
                 <MessageSquareDot />
-                Notifications
+                {t("sidebar.notifications")}
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem>
               <LogOut />
-              Log out
+              {t("sidebar.logout")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

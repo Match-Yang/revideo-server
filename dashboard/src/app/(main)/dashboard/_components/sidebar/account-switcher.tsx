@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useI18n } from "@/i18n/i18n-provider";
 import { cn, getInitials } from "@/lib/utils";
 
 export function AccountSwitcher({
@@ -27,6 +28,7 @@ export function AccountSwitcher({
   }>;
 }) {
   const [activeUser, setActiveUser] = useState(users[0]);
+  const { t } = useI18n();
 
   if (!activeUser) {
     return null;
@@ -54,8 +56,8 @@ export function AccountSwitcher({
                 <AvatarFallback>{getInitials(user.name)}</AvatarFallback>
               </Avatar>
               <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">{user.name}</span>
-                <span className="truncate text-xs capitalize">{user.role}</span>
+                <span className="truncate font-semibold">{user.id === "publisher" ? t("sidebar.publisher") : t("sidebar.operator")}</span>
+                <span className="truncate text-xs capitalize">{user.id === "publisher" ? t("sidebar.publisherRole") : t("sidebar.operatorRole")}</span>
               </div>
               <span
                 className={cn(
@@ -72,21 +74,21 @@ export function AccountSwitcher({
         <DropdownMenuGroup>
           <DropdownMenuItem>
             <BadgeCheck />
-            Account
+            {t("sidebar.account")}
           </DropdownMenuItem>
           <DropdownMenuItem>
             <CreditCard />
-            Billing
+            {t("sidebar.billing")}
           </DropdownMenuItem>
           <DropdownMenuItem>
             <Bell />
-            Notifications
+            {t("sidebar.notifications")}
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem>
           <LogOut />
-          Log out
+          {t("sidebar.logout")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

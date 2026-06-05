@@ -13,6 +13,7 @@ import {
 
 export interface NavSubItem {
   title: string;
+  titleKey?: string;
   url: string;
   icon?: LucideIcon;
   comingSoon?: boolean;
@@ -22,6 +23,7 @@ export interface NavSubItem {
 
 export interface NavMainItem {
   title: string;
+  titleKey?: string;
   url: string;
   icon?: LucideIcon;
   subItems?: NavSubItem[];
@@ -33,6 +35,7 @@ export interface NavMainItem {
 export interface NavGroup {
   id: number;
   label?: string;
+  labelKey?: string;
   items: NavMainItem[];
 }
 
@@ -40,24 +43,29 @@ export const sidebarItems: NavGroup[] = [
   {
     id: 1,
     label: "Operations",
+    labelKey: "sidebar.operations",
     items: [
       {
         title: "Overview",
+        titleKey: "sidebar.overview",
         url: "/dashboard/default",
         icon: LayoutDashboard,
       },
       {
         title: "Jobs",
+        titleKey: "sidebar.jobs",
         url: "/dashboard/jobs",
         icon: ClipboardList,
       },
       {
         title: "Queue",
+        titleKey: "sidebar.queue",
         url: "/dashboard/queue",
         icon: GitBranch,
       },
       {
         title: "Publishing",
+        titleKey: "sidebar.publishing",
         url: "/dashboard/publishing",
         icon: Rocket,
       },
@@ -66,19 +74,23 @@ export const sidebarItems: NavGroup[] = [
   {
     id: 2,
     label: "System",
+    labelKey: "sidebar.system",
     items: [
       {
         title: "Health",
+        titleKey: "sidebar.health",
         url: "/dashboard/health",
         icon: HeartPulse,
       },
       {
         title: "Browser",
+        titleKey: "sidebar.browser",
         url: "/dashboard/browser",
         icon: Bot,
       },
       {
         title: "Settings",
+        titleKey: "sidebar.settings",
         url: "/dashboard/settings",
         icon: Settings,
       },
@@ -87,15 +99,18 @@ export const sidebarItems: NavGroup[] = [
   {
     id: 3,
     label: "Artifacts",
+    labelKey: "sidebar.artifacts",
     items: [
       {
         title: "Rendered files",
+        titleKey: "sidebar.renderedFiles",
         url: "/out",
         icon: GalleryVerticalEnd,
         newTab: true,
       },
       {
         title: "API health",
+        titleKey: "sidebar.apiHealth",
         url: "/api/health",
         icon: Activity,
         newTab: true,
