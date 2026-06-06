@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { JOBS_DIR } from "../config";
+import { defaultRenderDir, defaultTaskDataDir, loadSettings } from "../settings";
 import type {
   CreateJobRequest,
   JobArtifacts,
@@ -11,7 +11,17 @@ import type {
   WorkflowStepState,
 } from "./types";
 
-const JOB_INDEX_FILE = path.join(JOBS_DIR, "index.json");
+// Base directory holding every job's working folder (manifest, source, derived,
+// publish). Configurable via settings.task.storage.taskDataDir so task data does
+// not have to live inside the source tree.
+function jobsBaseDir(): string {
+  return loadSettings().task.storage.taskDataDir || defaultTaskDataDir();
+}
+
+function jobIndexFile(): string {
+  return path.join(jobsBaseDir(), "index.json");
+}
+
 const ORDERED_WORKFLOW_STEPS: JobStep[] = [
   "created",
   "probing-source",
@@ -43,7 +53,7 @@ export function createJobId(platform: string, contentId?: string): string {
 }
 
 function createArtifacts(jobId: string): JobArtifacts {
-  const rootDir = path.join(JOBS_DIR, jobId);
+  const rootDir = path.join(jobsBaseDir(), jobId);
   return {
     rootDir,
     manifestPath: path.join(rootDir, "manifest.json"),
@@ -65,18 +75,19 @@ function ensureJobDirs(artifacts: JobArtifacts): void {
 }
 
 function readIndex(): string[] {
-  ensureDir(JOBS_DIR);
-  if (!fs.existsSync(JOB_INDEX_FILE)) {
-    fs.writeFileSync(JOB_INDEX_FILE, JSON.stringify({ jobs: [] }, null, 2));
+  ensureDir(jobsBaseDir());
+  const indexFile = jobIndexFile();
+  if (!fs.existsSync(indexFile)) {
+    fs.writeFileSync(indexFile, JSON.stringify({ jobs: [] }, null, 2));
     return [];
   }
-  const raw = JSON.parse(fs.readFileSync(JOB_INDEX_FILE, "utf-8")) as { jobs?: string[] };
+  const raw = JSON.parse(fs.readFileSync(indexFile, "utf-8")) as { jobs?: string[] };
   return raw.jobs || [];
 }
 
 function writeIndex(jobIds: string[]): void {
-  ensureDir(JOBS_DIR);
-  fs.writeFileSync(JOB_INDEX_FILE, JSON.stringify({ jobs: jobIds }, null, 2));
+  ensureDir(jobsBaseDir());
+  fs.writeFileSync(jobIndexFile(), JSON.stringify({ jobs: jobIds }, null, 2));
 }
 
 export function saveJob(job: RevideoJob): RevideoJob {
@@ -94,7 +105,7 @@ export function saveJob(job: RevideoJob): RevideoJob {
 }
 
 export function loadJob(jobId: string): RevideoJob | null {
-  const manifestPath = path.join(JOBS_DIR, jobId, "manifest.json");
+  const manifestPath = path.join(jobsBaseDir(), jobId, "manifest.json");
   if (!fs.existsSync(manifestPath)) return null;
   return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as RevideoJob;
 }
@@ -121,11 +132,13 @@ export function createJob(req: CreateJobRequest, platform: string, contentId?: s
   if (fs.existsSync(artifacts.rootDir)) {
     fs.rmSync(artifacts.rootDir, { recursive: true, force: true });
   }
-  // Delete old render output (out/{jobId}.mp4 and cover)
-  const outDir = path.resolve(process.cwd(), "out");
-  for (const ext of [".mp4", "-cover.jpg", "-cover-portrait.jpg"]) {
-    const f = path.join(outDir, `${jobId}${ext}`);
-    if (fs.existsSync(f)) fs.rmSync(f);
+  // Delete old render output from configured render dir (and legacy out/ fallback)
+  const renderDirs = [defaultRenderDir(), path.resolve(process.cwd(), "out")];
+  for (const outDir of renderDirs) {
+    for (const ext of [".mp4", "-cover.jpg", "-cover-portrait.jpg"]) {
+      const f = path.join(outDir, `${jobId}${ext}`);
+      if (fs.existsSync(f)) fs.rmSync(f);
+    }
   }
   const stepState: WorkflowStepState = {
     step: "created",

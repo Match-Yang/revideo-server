@@ -7,12 +7,16 @@ import {
   CheckCircle2,
   ChevronDown,
   ClipboardList,
+  Cpu,
+  Download,
   ExternalLink,
+  FolderOpen,
   Globe,
   Layers,
   Link2,
   Loader2,
   MessageSquare,
+  MoreHorizontal,
   Pause,
   Play,
   Plus,
@@ -27,6 +31,16 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
+
+import {
+  COVER_TEMPLATE_IDS,
+  DEFAULT_COVER_TEMPLATE,
+  buildCoverSvg,
+  coverTemplateAiPrompt,
+  coverTemplateFields,
+  coverTemplateSampleBg,
+  isNoTemplate,
+} from "@/lib/cover-templates";
 
 import {
   Accordion,
@@ -46,6 +60,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -159,7 +180,7 @@ const platformNames: Record<string, string> = {
   x: "X",
 };
 
-const targetPlatforms = ["bilibili", "douyin", "youtube", "tiktok", "xiaohongshu", "instagram", "x"];
+const targetPlatforms = ["bilibili", "douyin", "xiaohongshu", "youtube", "tiktok", "instagram", "x"];
 
 const languages = [
   "zh-CN",
@@ -172,7 +193,9 @@ const languages = [
   "ru",
 ];
 
-const coverTemplates = ["汽车测评", "海外评论", "科技产品", "新闻解说", "财经商业", "生活方式", "搞笑吐槽", "教程知识", "对比盘点", "极简无字"];
+// Sample copy used to render the template preview cards (so each card shows the
+// exact SVG the backend will produce for these three lines).
+const PREVIEW_SAMPLE = ["硬核实测", "国产新能源", "续航破千公里"];
 const styleConstraintOptions = ["自然口语", "保守直译", "短视频口吻", "新闻解说", "专业测评", "夸张吸睛", "幽默吐槽", "克制高级", "本土化表达", "保留原文语气", "适合 B 站", "适合抖音", "适合小红书", "适合 YouTube"];
 const agentChannels = [
   ["wechat", "微信"],
@@ -258,22 +281,38 @@ function stepProgress(job: RevideoJob) {
   return Math.min(99, Math.round(base + stepPercent));
 }
 
+// Current step number out of total, plus the resolved step key.
+function stepCounter(job: RevideoJob) {
+  const cursor = effectiveWorkflowCursor(job);
+  const total = workflowOrder.length;
+  const current = cursor.step === "completed" ? total : cursor.index >= 0 ? cursor.index + 1 : 0;
+  return { current, total, step: cursor.step };
+}
+
 function formatTime(value: number | undefined, locale: string) {
   return value ? new Date(value).toLocaleString(locale === "zh" ? "zh-CN" : "en-US") : "-";
 }
 
-function outputHref(output?: string) {
-  if (!output) return "";
-  const index = output.lastIndexOf("/out/");
-  if (index >= 0) return output.slice(index);
-  if (output.startsWith("out/")) return `/${output}`;
-  return output;
+function outputHref(jobId: string, type: "output" | "cover" = "output") {
+  return `/api/jobs/${jobId}/${type}`;
 }
 
 function jobTitle(job: RevideoJob) {
   const title = job.source?.metadata?.title;
   if (typeof title === "string" || typeof title === "number") return String(title);
   return job.id;
+}
+
+// First non-empty draft title across the job's targets, or "" if none generated yet.
+function draftTitle(job: RevideoJob) {
+  for (const target of job.targets || []) {
+    const draft = target.draft;
+    if (draft && typeof draft === "object" && !Array.isArray(draft)) {
+      const title = (draft as Record<string, JsonValue>).title;
+      if (typeof title === "string" && title.trim()) return title;
+    }
+  }
+  return "";
 }
 
 function stringArray(value: JsonValue | undefined, fallback: string[]) {
@@ -311,14 +350,16 @@ function parseFieldValue(name: string, value: FormDataEntryValue) {
     "task.download.maxComments",
     "task.download.retryCount",
     "task.download.timeoutSec",
-    "task.coverAndCopy.frameSampleCount",
-    "task.coverAndCopy.titleMaxLength",
+    "task.coverAndCopy.fixedFrameIndex",
     "task.render.repeatTimes",
     "task.publish.retryCount",
     "llm.timeoutSec",
     "llm.retryCount",
   ]);
-  return numericFields.has(name) ? Number(raw || 0) : raw;
+  if (numericFields.has(name)) return Number(raw || 0);
+  // Per-platform retry counts
+  if (/^task\.publish\.platformConfigs\.[^.]+\.retryCount$/.test(name)) return Number(raw || 0);
+  return raw;
 }
 
 function agentChannel(settings: SettingsShape | null, type: string) {
@@ -368,14 +409,23 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
   const [selectedJobId, setSelectedJobId] = React.useState("");
   const [query, setQuery] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("all");
+  const [pageSize, setPageSize] = React.useState(15);
+  const [page, setPage] = React.useState(1);
   const [sourceUrl, setSourceUrl] = React.useState("");
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [promptPanelOpen, setPromptPanelOpen] = React.useState(false);
   const [repeatTimes, setRepeatTimes] = React.useState(1);
   const [createTargets, setCreateTargets] = React.useState<string[]>(["bilibili"]);
   const [settingsTargets, setSettingsTargets] = React.useState<string[]>(["bilibili"]);
+  const [activeSettings, setActiveSettings] = React.useState("download");
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState("");
+  const [settingsTargetsVersion, setSettingsTargetsVersion] = React.useState(0);
+  const formRef = React.useRef<HTMLFormElement | null>(null);
+  const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Always-fresh ref so debounce timer reads latest settingsTargets
+  const settingsTargetsRef = React.useRef(settingsTargets);
+  settingsTargetsRef.current = settingsTargets;
 
   const refresh = React.useCallback(async (showToast = false) => {
     const [jobsRes, queueRes, settingsRes, browserRes, healthRes] = await Promise.all([
@@ -413,11 +463,20 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     return [...jobs]
       .filter((job) => {
         const status = derivedStatus(job, queue);
-        const text = `${job.id} ${job.source?.url || ""} ${jobTitle(job)}`.toLowerCase();
+        const text = `${jobTitle(job)} ${draftTitle(job)}`.toLowerCase();
         return (statusFilter === "all" || status === statusFilter) && (!normalized || text.includes(normalized));
       })
       .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
   }, [jobs, query, queue, statusFilter]);
+
+  // Client-side pagination over the filtered list.
+  React.useEffect(() => setPage(1), [query, statusFilter, pageSize]);
+  const pageCount = Math.max(1, Math.ceil(filteredJobs.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = (currentPage - 1) * pageSize;
+  const pagedJobs = filteredJobs.slice(pageStart, pageStart + pageSize);
+  const firstRow = filteredJobs.length === 0 ? 0 : pageStart + 1;
+  const lastRow = Math.min(pageStart + pageSize, filteredJobs.length);
 
   async function mutate(label: string, action: () => Promise<unknown>) {
     setBusy(label);
@@ -454,9 +513,9 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
             renderComments: data.get("renderComments") === "on",
             targetLanguage: formString(data, "targetLanguage", "zh-CN"),
             publishAction: formString(data, "publishAction", "draft"),
-            coverMode: formString(data, "coverMode", "template-ai-copy"),
-            coverTemplate: formString(data, "coverTemplate", "汽车测评"),
-            fixedCoverCopy: formString(data, "fixedCoverCopy", ""),
+            coverTemplate: formString(data, "coverTemplate", DEFAULT_COVER_TEMPLATE),
+            coverImageMode: formString(data, "coverImageMode", "ai"),
+            coverCopyMode: formString(data, "coverCopyMode", "ai"),
             bilingualSubtitles: data.get("bilingualSubtitles") === "on",
             promptOverrides: {
               subtitle: formString(data, "promptSubtitle"),
@@ -479,9 +538,10 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     return jsonFetch(`/api/jobs/${encodeURIComponent(jobId)}/${action}`, { method: "POST" });
   });
 
-  const saveSettings = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
+  // Reads the form and POSTs to /api/settings. Uses settingsTargetsRef so it's
+  // safe to call from a debounce timer (always gets the latest platform selection).
+  function persistSettings(form: HTMLFormElement) {
+    const data = new FormData(form);
     const payload: SettingsShape = { version: 2, task: {}, llm: {}, agent: {} };
     const booleanFields = new Set([
       "task.translation.bilingualSubtitles",
@@ -490,6 +550,11 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
       "task.publish.preflightChecks.files",
       "task.publish.preflightChecks.copy",
       "task.publish.preflightChecks.adapter",
+      "task.publish.platformConfigs.tiktok.allowComment",
+      "task.publish.platformConfigs.tiktok.allowDuet",
+      "task.publish.platformConfigs.tiktok.allowStitch",
+      "task.publish.platformConfigs.tiktok.isAigc",
+      "task.publish.platformConfigs.x.isSensitive",
       "agent.enabled",
     ]);
 
@@ -503,7 +568,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     booleanFields.forEach((name) => {
       setPath(payload as Record<string, unknown>, name, data.get(name) === "on");
     });
-    setPath(payload as Record<string, unknown>, "task.publish.defaultPlatforms", settingsTargets);
+    setPath(payload as Record<string, unknown>, "task.publish.defaultPlatforms", settingsTargetsRef.current);
     setPath(payload as Record<string, unknown>, "agent.channels", agentChannels.map(([type]) => ({
       type,
       enabled: data.get(`agent.channels.${type}.enabled`) === "on",
@@ -512,17 +577,31 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
       allowRemoteActions: data.get(`agent.channels.${type}.allowRemoteActions`) === "on",
     })));
 
-    void mutate("settings", async () => {
-      const response = await jsonFetch<{ settings: SettingsShape }>("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    jsonFetch<{ settings: SettingsShape }>("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((response) => {
       setSettings(response.settings);
+      toast.success("已保存");
+    }).catch((error) => {
+      toast.error(error instanceof Error ? error.message : String(error));
     });
-  };
+  }
 
-  const platformChooser = (value: string[], onChange: React.Dispatch<React.SetStateAction<string[]>>) => (
+  function scheduleSave(form: HTMLFormElement, delay = 700) {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => persistSettings(form), delay);
+  }
+
+  // Trigger auto-save when user changes the platform toggle buttons
+  React.useEffect(() => {
+    if (settingsTargetsVersion === 0) return;
+    if (formRef.current) scheduleSave(formRef.current, 300);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsTargetsVersion]);
+
+  const platformChooser = (value: string[], onChange: React.Dispatch<React.SetStateAction<string[]>>, isSettings = false) => (
     <div className="flex flex-wrap gap-2">
       {targetPlatforms.map((platform) => {
         const checked = value.includes(platform);
@@ -532,7 +611,10 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
             type="button"
             variant={checked ? "default" : "outline"}
             size="sm"
-            onClick={() => onChange((current) => checked ? current.filter((item) => item !== platform) : [...current, platform])}
+            onClick={() => {
+              onChange((current) => checked ? current.filter((item) => item !== platform) : [...current, platform]);
+              if (isSettings) setSettingsTargetsVersion((v) => v + 1);
+            }}
           >
             {platformNames[platform] || platform}
           </Button>
@@ -582,6 +664,17 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
                 className="h-auto border-0 bg-transparent p-0 text-sm shadow-none placeholder:text-muted-foreground/50 focus-visible:ring-0"
               />
             </div>
+            {(() => {
+              const trimmed = sourceUrl.trim();
+              const dup = trimmed ? jobs.find((job) => job.source?.url === trimmed) : undefined;
+              if (!dup) return null;
+              return (
+                <div className="mt-2 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-700 text-xs ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:ring-amber-900/60">
+                  <XCircle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>已存在相同链接的任务，继续创建将覆盖旧任务及其全部数据。</span>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Core options — icon | label : control rows */}
@@ -669,7 +762,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
                 </div>
               </SettingsAccordionItem>
 
-              <SettingsAccordionItem value="language" title="语言与提示词" description="目标语言、双语字幕和额外提示词。" icon={Globe} compact>
+              <SettingsAccordionItem value="language" title="语言与提示词" description="目标语言、双语字幕和额外提示词。" icon={Globe} compact autoHeight>
                 <div className="grid gap-4">
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
                     <FieldControl label="目标语言">
@@ -701,26 +794,26 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
                 </div>
               </SettingsAccordionItem>
 
-              <SettingsAccordionItem value="cover" title="封面与文案" description="封面模式、模板和固定文案。" icon={Layers} compact>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <FieldControl label="封面模式" help="固定文案模式不会让 AI 写封面字。">
-                    <NativeSelect name="coverMode" defaultValue={getNested(settings, "task.coverAndCopy.coverMode", "template-ai-copy")}>
-                      <NativeSelectOption value="none">不生成封面</NativeSelectOption>
-                      <NativeSelectOption value="ai-frame-ai-copy">AI 选画面 + AI 文案</NativeSelectOption>
-                      <NativeSelectOption value="template-fixed-copy">固定模板 + 固定文案</NativeSelectOption>
-                      <NativeSelectOption value="template-ai-copy">固定模板 + AI 文案</NativeSelectOption>
-                    </NativeSelect>
-                  </FieldControl>
+              <SettingsAccordionItem value="cover" title="封面与文案" description="封面模板、封面图来源和文案来源。" icon={Layers} compact>
+                <div className="grid gap-3 sm:grid-cols-3">
                   <FieldControl label="封面模板">
-                    <NativeSelect name="coverTemplate" defaultValue={getNested(settings, "task.coverAndCopy.template", "汽车测评")}>
-                      {coverTemplates.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}
+                    <NativeSelect name="coverTemplate" defaultValue={getNested(settings, "task.coverAndCopy.template", DEFAULT_COVER_TEMPLATE)}>
+                      {COVER_TEMPLATE_IDS.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}
                     </NativeSelect>
                   </FieldControl>
-                  <div className="sm:col-span-2">
-                    <FieldControl label="固定封面文案" help="不想让 AI 写封面字时使用这里的固定文案。">
-                      <Input name="fixedCoverCopy" defaultValue={getNested(settings, "task.coverAndCopy.fixedCoverCopy", "")} />
-                    </FieldControl>
-                  </div>
+                  <FieldControl label="封面图" help="固定帧使用某一帧画面；AI 选帧抽取多帧交给 AI 选择。">
+                    <NativeSelect name="coverImageMode" defaultValue={getNested(settings, "task.coverAndCopy.imageMode", "ai")}>
+                      <NativeSelectOption value="fixed">固定帧</NativeSelectOption>
+                      <NativeSelectOption value="ai">AI 选帧</NativeSelectOption>
+                    </NativeSelect>
+                  </FieldControl>
+                  <FieldControl label="封面文案" help="无文案则只用画面；固定/AI 文案在设置中配置。">
+                    <NativeSelect name="coverCopyMode" defaultValue={getNested(settings, "task.coverAndCopy.copyMode", "ai")}>
+                      <NativeSelectOption value="none">无文案</NativeSelectOption>
+                      <NativeSelectOption value="fixed">固定文案</NativeSelectOption>
+                      <NativeSelectOption value="ai">AI 文案</NativeSelectOption>
+                    </NativeSelect>
+                  </FieldControl>
                 </div>
               </SettingsAccordionItem>
             </Accordion>
@@ -740,23 +833,13 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
 
   const jobsTable = (
     <Card>
-      <CardHeader>
-        <CardTitle>{t("jobs.title")}</CardTitle>
-        <CardDescription>{t("jobs.description")}</CardDescription>
-        <CardAction>
-          <Button variant="outline" size="sm" onClick={() => refresh(true)}>
-            <RefreshCcw />
-            {t("actions.refresh")}
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-          <div className="relative w-full xl:w-96">
+      <CardContent className="grid gap-4 pt-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-60 shrink-0">
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("jobs.searchPlaceholder")} />
           </div>
-          <NativeSelect value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-full xl:w-44">
+          <NativeSelect value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-36">
             <NativeSelectOption value="all">{t("jobs.allStatuses")}</NativeSelectOption>
             <NativeSelectOption value="running">{t("status.running")}</NativeSelectOption>
             <NativeSelectOption value="publishing">{t("status.publishing")}</NativeSelectOption>
@@ -764,19 +847,22 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
             <NativeSelectOption value="completed">{t("status.completed")}</NativeSelectOption>
             <NativeSelectOption value="failed">{t("status.failed")}</NativeSelectOption>
           </NativeSelect>
+          <Button variant="outline" size="icon" onClick={() => refresh(true)} title={t("actions.refresh")}>
+            <RefreshCcw />
+          </Button>
+          <div className="ml-auto">{createTaskDialog}</div>
         </div>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t("jobs.job")}</TableHead>
-              <TableHead>{t("jobs.status")}</TableHead>
               <TableHead>{t("jobs.progress")}</TableHead>
-              <TableHead>{t("jobs.targets")}</TableHead>
-              <TableHead className="text-right">{t("jobs.updated")}</TableHead>
+              <TableHead>{t("jobs.status")}</TableHead>
+              <TableHead className="text-right">{t("jobs.actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredJobs.length ? filteredJobs.map((job) => (
+            {pagedJobs.length ? pagedJobs.map((job) => (
               <TableRow
                 key={job.id}
                 data-state={selectedJob?.id === job.id ? "selected" : undefined}
@@ -786,30 +872,69 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
                 <TableCell className="max-w-[360px] whitespace-normal">
                   <div className="grid gap-1">
                     <span className="truncate font-medium">{jobTitle(job)}</span>
-                    <span className="truncate text-muted-foreground text-xs">{job.id}</span>
+                    <span className="truncate text-muted-foreground text-xs">{draftTitle(job)}</span>
                   </div>
                 </TableCell>
-                <TableCell>{statusBadge(derivedStatus(job, queue), t)}</TableCell>
                 <TableCell className="min-w-40">
                   <div className="grid gap-1">
                     <Progress value={stepProgress(job)} />
-                    <span className="text-muted-foreground text-xs">{t(`steps.${effectiveWorkflowCursor(job).step}`)} · x{job.options?.repeatTimes || 1}</span>
+                    <span className="text-muted-foreground text-xs">{stepCounter(job).current}/{stepCounter(job).total} {t(`steps.${stepCounter(job).step}`)} · x{job.options?.repeatTimes || 1}</span>
                   </div>
                 </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    {(job.targets || []).map((target) => <Badge key={target.platform} variant="outline">{platformNames[target.platform] || target.platform}</Badge>)}
-                  </div>
+                <TableCell>{statusBadge(derivedStatus(job, queue), t)}</TableCell>
+                <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
+                  {(() => {
+                    const status = derivedStatus(job, queue);
+                    const canPause = status === "running" || status === "publishing";
+                    const canResume = status === "created" || status === "paused" || status === "failed";
+                    const canRetry = status === "paused" || status === "failed" || status === "completed" || status === "cancelled";
+                    const hasLinks = job.source?.url || job.artifacts?.outputVideo;
+                    return (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="size-8"><MoreHorizontal /></Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {job.source?.url && (
+                            <DropdownMenuItem onClick={() => window.open(job.source?.url, "_blank")}><Link2 /> {t("actions.openLink")}</DropdownMenuItem>
+                          )}
+                          {job.artifacts?.outputVideo && (
+                            <DropdownMenuItem onClick={() => window.open(outputHref(job.id), "_blank")}><ExternalLink /> {t("actions.openOutput")}</DropdownMenuItem>
+                          )}
+                          {hasLinks && <DropdownMenuSeparator />}
+                          {canPause && <DropdownMenuItem onClick={() => runJobAction(job.id, "pause")}><Pause /> {t("actions.pause")}</DropdownMenuItem>}
+                          {canResume && <DropdownMenuItem onClick={() => runJobAction(job.id, "resume")}><Play /> {t("actions.resume")}</DropdownMenuItem>}
+                          {canRetry && <DropdownMenuItem onClick={() => runJobAction(job.id, "retry")}><RotateCcw /> {t("actions.retry")}</DropdownMenuItem>}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem variant="destructive" onClick={() => runJobAction(job.id, "delete")}><Trash2 /> {t("actions.delete")}</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    );
+                  })()}
                 </TableCell>
-                <TableCell className="text-right text-muted-foreground text-xs">{formatTime(job.updatedAt, locale)}</TableCell>
               </TableRow>
             )) : (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">{t("jobs.noMatchingJobs")}</TableCell>
+                <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">{t("jobs.noMatchingJobs")}</TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
+        <div className="flex flex-col gap-3 text-muted-foreground text-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span>{t("jobs.rowsPerPage")}</span>
+              <NativeSelect value={String(pageSize)} onChange={(event) => setPageSize(Number(event.target.value))} className="w-20">
+                {[15, 30, 50, 100].map((size) => <NativeSelectOption key={size} value={String(size)}>{size}</NativeSelectOption>)}
+              </NativeSelect>
+            </div>
+            <span>{t("jobs.showingRows", { start: firstRow, end: lastRow, total: filteredJobs.length })}</span>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>{t("jobs.previous")}</Button>
+            <Button variant="outline" size="sm" disabled={currentPage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>{t("jobs.next")}</Button>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
@@ -826,12 +951,20 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
           <Badge variant="outline">{platformNames[selectedJob.source?.platform || ""] || selectedJob.source?.platform || t("jobs.source")}</Badge>
           <Badge variant="outline">{t("jobs.comments")} {selectedJob.options?.targetCommentCount ?? "-"}</Badge>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Button size="sm" variant="outline" onClick={() => runJobAction(selectedJob.id, "pause")}><Pause /> {t("actions.pause")}</Button>
-          <Button size="sm" variant="outline" onClick={() => runJobAction(selectedJob.id, "resume")}><Play /> {t("actions.resume")}</Button>
-          <Button size="sm" variant="outline" onClick={() => runJobAction(selectedJob.id, "retry")}><RefreshCcw /> {t("actions.retry")}</Button>
-          <Button size="sm" variant="destructive" onClick={() => runJobAction(selectedJob.id, "delete")}><Trash2 /> {t("actions.delete")}</Button>
-        </div>
+        {(() => {
+          const status = derivedStatus(selectedJob, queue);
+          const canPause = status === "running" || status === "publishing";
+          const canResume = status === "created" || status === "paused" || status === "failed";
+          const canRetry = status === "paused" || status === "failed" || status === "completed" || status === "cancelled";
+          return (
+            <div className="flex flex-wrap gap-2">
+              {canPause && <Button size="sm" variant="outline" onClick={() => runJobAction(selectedJob.id, "pause")}><Pause /> {t("actions.pause")}</Button>}
+              {canResume && <Button size="sm" variant="outline" onClick={() => runJobAction(selectedJob.id, "resume")}><Play /> {t("actions.resume")}</Button>}
+              {canRetry && <Button size="sm" variant="outline" onClick={() => runJobAction(selectedJob.id, "retry")}><RotateCcw /> {t("actions.retry")}</Button>}
+              <Button size="sm" variant="destructive" onClick={() => runJobAction(selectedJob.id, "delete")}><Trash2 /> {t("actions.delete")}</Button>
+            </div>
+          );
+        })()}
         <div className="grid gap-2">
           {workflowOrder.map((step) => {
             const state = selectedJob.workflow?.steps?.[step]?.status || "pending";
@@ -850,7 +983,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
         </div>
         {selectedJob.artifacts?.outputVideo && (
           <Button asChild variant="outline">
-            <a href={outputHref(selectedJob.artifacts.outputVideo)} target="_blank" rel="noreferrer">
+            <a href={outputHref(selectedJob.id)} target="_blank" rel="noreferrer">
               <ExternalLink />
               {t("actions.openOutput")}
             </a>
@@ -900,200 +1033,242 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     </div>
   );
 
+  const settingsGroups: Array<{ group: string; items: Array<{ id: string; label: string; icon: React.ElementType }> }> = [
+    {
+      group: "任务流程",
+      items: [
+        { id: "download", label: "下载与存储", icon: Download },
+        { id: "prepare", label: "素材整理与适配", icon: SlidersHorizontal },
+        { id: "translation", label: "翻译", icon: Globe },
+        { id: "cover", label: "封面与文案", icon: Layers },
+        { id: "render", label: "渲染", icon: Play },
+        { id: "publish", label: "发布", icon: Send },
+      ],
+    },
+    {
+      group: "模型与集成",
+      items: [
+        { id: "llm", label: "LLM 设置", icon: Cpu },
+        { id: "agent", label: "Agent 设置", icon: Rocket },
+      ],
+    },
+  ];
+
   const settingsPanel = (
-    <form className="grid gap-4" onSubmit={saveSettings}>
-      <Tabs defaultValue="task" className="grid gap-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <TabsList className="w-fit">
-            <TabsTrigger value="task">任务设置</TabsTrigger>
-            <TabsTrigger value="llm">LLM 设置</TabsTrigger>
-            <TabsTrigger value="agent">Agent 设置</TabsTrigger>
-          </TabsList>
-          <Button className="w-fit" type="submit" disabled={busy === "settings"}><Settings /> 保存设置</Button>
-        </div>
-
-        <TabsContent value="task" className="grid gap-4">
-          <Accordion type="multiple" defaultValue={["download", "render", "publish"]} className="grid gap-3">
-            <SettingsAccordionItem value="source" title="来源识别" description="识别链接、判断平台、读取视频基本信息。">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <SelectField name="task.source.defaultPlatform" label="默认来源平台" help="默认使用自动，系统会根据链接匹配平台。" defaultValue={getNested(settings, "task.source.defaultPlatform", "auto")} options={[["auto", "自动"], ["youtube", "YouTube"], ["tiktok", "TikTok"], ["bilibili", "Bilibili"], ["douyin", "Douyin"], ["xiaohongshu", "小红书"]]} />
-                <SelectField name="task.source.duplicateStrategy" label="重复任务处理" help="同一个视频链接重复创建时怎么处理。" defaultValue={getNested(settings, "task.source.duplicateStrategy", "block")} options={[["block", "阻止创建"], ["overwrite", "覆盖旧任务"], ["reuse-assets", "复用素材重新生成"]]} />
-                <SelectField name="task.source.loginMode" label="默认登录态" help="有些平台需要登录才能看到评论、字幕或高清视频。" defaultValue={getNested(settings, "task.source.loginMode", "platform-session")} options={[["platform-session", "使用平台登录态"], ["no-login", "不使用登录态"]]} />
-                <SelectField name="task.source.sourceLanguage" label="来源语言" help="用于决定是否需要翻译字幕和评论。" defaultValue={getNested(settings, "task.source.sourceLanguage", "auto")} options={[["auto", "自动检测"], ["zh-CN", "中文"], ["en", "英语"], ["ja", "日语"], ["ko", "韩语"]]} />
-              </div>
-            </SettingsAccordionItem>
-
-            <SettingsAccordionItem value="download" title="下载与素材缓存" description="下载视频、字幕、评论、平台元数据，并保存到本地缓存目录。">
-              <div className="grid gap-3">
-                <FieldControl label="下载缓存位置" help="视频、字幕、评论 JSON、评论头像都会先缓存到这里，方便失败后重试。">
-                  <Input name="task.download.cacheDir" defaultValue={getNested(settings, "task.download.cacheDir", "")} />
-                </FieldControl>
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <SelectField name="task.download.videoQuality" label="默认视频下载分辨率" help="这是默认值；平台不提供时会按 fallback 策略选择最接近版本。" defaultValue={getNested(settings, "task.download.videoQuality", "auto")} options={[["auto", "自动"], ["best", "最高清"], ["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]]} />
-                  <SelectField name="task.download.qualityFallback" label="视频分辨率 fallback" help="例如默认 1080p，如果没有 1080p，向下兼容会尝试 720p。" defaultValue={getNested(settings, "task.download.qualityFallback", "down")} options={[["down", "向下兼容"], ["up", "向上兼容"], ["exact", "只接受指定分辨率"]]} />
-                  <SelectField name="task.download.audioMode" label="默认音频下载" help="一般保持跟随视频；只有源视频音轨异常时才需要单独策略。" defaultValue={getNested(settings, "task.download.audioMode", "follow-video")} options={[["follow-video", "跟随视频"], ["best-audio", "单独下载最佳音频"], ["none", "不单独处理音频"]]} />
-                  <SelectField name="task.download.subtitleMode" label="默认字幕下载" help="如果平台没有字幕，任务不会失败，会继续进入后续流程。" defaultValue={getNested(settings, "task.download.subtitleMode", "platform-preferred")} options={[["platform-preferred", "优先平台字幕"], ["all", "下载全部字幕"], ["none", "不下载字幕"]]} />
-                  <SelectField name="task.download.subtitleFallback" label="字幕 fallback" help="语音识别未来接入；当前可先保留跳过。" defaultValue={getNested(settings, "task.download.subtitleFallback", "skip")} options={[["skip", "没有字幕就跳过"], ["speech-to-text", "尝试语音识别"]]} />
-                  <SelectField name="task.download.commentSampling" label="评论采样方式" help="按视频时长自动会根据每条评论秒数和视频时长计算目标评论数。" defaultValue={getNested(settings, "task.download.commentSampling", "duration")} options={[["duration", "按视频时长自动"], ["fixed", "固定数量"], ["hot", "热门优先"], ["latest", "最新优先"]]} />
-                  <LabelInput label="每条评论秒数" help="例如视频 60 秒、每条评论 2 秒、重复 1 次，则目标约 30 条。" name="task.download.commentSeconds" type="number" min={0.5} step={0.5} defaultValue={getNested(settings, "task.download.commentSeconds", 2)} />
-                  <LabelInput label="最大评论数" help="防止超长视频下载过多评论。" name="task.download.maxComments" type="number" min={1} max={5000} defaultValue={getNested(settings, "task.download.maxComments", 800)} />
-                  <LabelInput label="下载重试次数" name="task.download.retryCount" type="number" min={0} max={10} defaultValue={getNested(settings, "task.download.retryCount", 2)} />
-                  <LabelInput label="下载超时秒数" name="task.download.timeoutSec" type="number" min={30} defaultValue={getNested(settings, "task.download.timeoutSec", 600)} />
-                </div>
-                <p className="rounded-lg border bg-muted/40 px-3 py-2 text-muted-foreground text-xs">评论头像下载不做开关：只要开启评论渲染，就会自动下载评论头像；失败时使用首字母或平台默认头像，不中断任务。</p>
-              </div>
-            </SettingsAccordionItem>
-
-            <SettingsAccordionItem value="prepare" title="素材整理与适配" description="把原始视频、音频、字幕、评论整理成渲染器能稳定使用的格式。">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <SelectField name="task.prepare.outputAspect" label="默认输出画幅" help="短视频默认建议竖屏；横屏源视频会按适配方式处理。" defaultValue={getNested(settings, "task.prepare.outputAspect", "portrait")} options={[["auto", "自动"], ["portrait", "竖屏 9:16"], ["landscape", "横屏 16:9"], ["source", "保持原视频"]]} />
-                <SelectField name="task.prepare.outputResolution" label="默认输出分辨率" help="最终渲染目标，不等同于下载分辨率。" defaultValue={getNested(settings, "task.prepare.outputResolution", "1080x1920")} options={[["auto", "自动"], ["1080x1920", "1080x1920"], ["720x1280", "720x1280"], ["1920x1080", "1920x1080"]]} />
-                <SelectField name="task.prepare.fitMode" label="画面适配方式" help="用于处理源视频比例和输出比例不一致的情况。" defaultValue={getNested(settings, "task.prepare.fitMode", "smart-crop")} options={[["smart-crop", "智能裁剪"], ["blur-background", "模糊背景补边"], ["keep-bars", "黑边保留"], ["center-crop", "居中裁剪"]]} />
-                <SelectField name="task.prepare.audioNormalize" label="音量适配" help="自动会尽量把音量调整到适合短视频播放的范围。" defaultValue={getNested(settings, "task.prepare.audioNormalize", "auto")} options={[["auto", "自动"], ["off", "不处理"]]} />
-                <SelectField name="task.prepare.subtitleCleanup" label="字幕整理" help="自动合并可以减少字幕过碎导致的闪烁。" defaultValue={getNested(settings, "task.prepare.subtitleCleanup", "merge-short")} options={[["merge-short", "自动合并短句"], ["keep", "保持原样"]]} />
-              </div>
-            </SettingsAccordionItem>
-
-            <SettingsAccordionItem value="translation" title="翻译与文本处理" description="翻译字幕、翻译评论、处理标题描述文案。">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <SelectField name="task.translation.targetLanguage" label="目标语言" defaultValue={getNested(settings, "task.translation.targetLanguage", "zh-CN")} options={languages.map((code) => [code, t(`languages.${code}`)])} />
-                <SelectField name="task.translation.subtitleMode" label="字幕翻译" help="自动会根据来源语言和目标语言判断是否翻译。" defaultValue={getNested(settings, "task.translation.subtitleMode", "auto")} options={[["auto", "自动"], ["always", "总是翻译"], ["off", "不翻译"]]} />
-                <SelectField name="task.translation.commentMode" label="评论翻译" defaultValue={getNested(settings, "task.translation.commentMode", "auto")} options={[["auto", "自动"], ["always", "总是翻译"], ["off", "不翻译"]]} />
-                <SwitchRow label="双语字幕" name="task.translation.bilingualSubtitles" defaultChecked={getNested(settings, "task.translation.bilingualSubtitles", false)} />
-                <SelectField name="task.translation.sensitiveContent" label="敏感内容处理" help="不单独设置审核提示词，统一由这里和通用提示词控制。" defaultValue={getNested(settings, "task.translation.sensitiveContent", "preserve")} options={[["preserve", "保留原意"], ["soften", "温和改写"], ["mark", "标记但保留"], ["delete", "删除"]]} />
-              </div>
-              <FieldControl label="风格约束" help="可多选。保存时用逗号分隔，后端会按文本处理。">
-                <Input name="task.translation.styleConstraints" defaultValue={listValue(getNested<JsonValue | undefined>(settings, "task.translation.styleConstraints", undefined), ["自然口语", "本土化表达"])} placeholder={styleConstraintOptions.join("，")} />
-              </FieldControl>
-              <div className="grid gap-3 md:grid-cols-2">
-                <PromptField name="task.translation.prompts.subtitle" label="字幕翻译额外提示词" defaultValue={getNested(settings, "task.translation.prompts.subtitle", "")} />
-                <PromptField name="task.translation.prompts.comment" label="评论翻译额外提示词" defaultValue={getNested(settings, "task.translation.prompts.comment", "")} />
-                <PromptField name="task.translation.prompts.title" label="标题生成额外提示词" defaultValue={getNested(settings, "task.translation.prompts.title", "")} />
-                <PromptField name="task.translation.prompts.description" label="描述生成额外提示词" defaultValue={getNested(settings, "task.translation.prompts.description", "")} />
-                <PromptField name="task.translation.prompts.tags" label="标签/话题生成额外提示词" defaultValue={getNested(settings, "task.translation.prompts.tags", "")} />
-              </div>
-            </SettingsAccordionItem>
-
-            <SettingsAccordionItem value="cover" title="封面与平台文案" description="生成封面、标题、描述、标签、话题，并填入各平台草稿。">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <SelectField name="task.coverAndCopy.coverMode" label="封面模式" help="固定文案模式不会让 AI 写封面字。" defaultValue={getNested(settings, "task.coverAndCopy.coverMode", "template-ai-copy")} options={[["none", "不生成封面"], ["ai-frame-ai-copy", "AI 选画面 + AI 文案"], ["template-fixed-copy", "固定模板 + 固定文案"], ["template-ai-copy", "固定模板 + AI 文案"]]} />
-                <SelectField name="task.coverAndCopy.template" label="默认封面模板" help="不同板块使用不同视觉风格。" defaultValue={getNested(settings, "task.coverAndCopy.template", "汽车测评")} options={coverTemplates.map((item) => [item, item])} />
-                <SelectField name="task.coverAndCopy.framePreference" label="AI 选帧偏好" help="原来的封面选择提示词改成更可理解的选帧偏好。" defaultValue={getNested(settings, "task.coverAndCopy.framePreference", "auto")} options={[["auto", "自动"], ["people", "人物优先"], ["product", "产品优先"], ["action", "动作画面优先"], ["information", "信息画面优先"]]} />
-                <LabelInput label="抽帧数量" help="系统会从视频中抽取多张截图，再选择一张做封面。" name="task.coverAndCopy.frameSampleCount" type="number" min={1} max={10} defaultValue={getNested(settings, "task.coverAndCopy.frameSampleCount", 5)} />
-                <LabelInput label="固定封面文案" name="task.coverAndCopy.fixedCoverCopy" defaultValue={getNested(settings, "task.coverAndCopy.fixedCoverCopy", "")} />
-                <SelectField name="task.coverAndCopy.titleMode" label="标题生成" defaultValue={getNested(settings, "task.coverAndCopy.titleMode", "ai")} options={[["template", "固定模板"], ["ai", "AI 生成"], ["source", "使用来源标题"]]} />
-                <SelectField name="task.coverAndCopy.descriptionMode" label="描述生成" defaultValue={getNested(settings, "task.coverAndCopy.descriptionMode", "ai")} options={[["template", "固定模板"], ["ai", "AI 生成"], ["source", "使用来源描述"]]} />
-                <SelectField name="task.coverAndCopy.tagsMode" label="标签/话题生成" defaultValue={getNested(settings, "task.coverAndCopy.tagsMode", "ai")} options={[["template", "固定模板"], ["ai", "AI 生成"], ["manual", "手动"]]} />
-              </div>
-              <PromptField name="task.coverAndCopy.aiCoverPrompt" label="AI 封面文案额外提示词" defaultValue={getNested(settings, "task.coverAndCopy.aiCoverPrompt", "")} />
-              <div className="grid gap-3 md:grid-cols-3">
-                <LabelInput label="标题最大长度" name="task.coverAndCopy.titleMaxLength" type="number" defaultValue={getNested(settings, "task.coverAndCopy.titleMaxLength", 80)} />
-                <LabelInput label="标签/话题模板" name="task.coverAndCopy.tagsTemplate" defaultValue={getNested(settings, "task.coverAndCopy.tagsTemplate", "")} />
-                <LabelInput label="禁词和替换词" name="task.coverAndCopy.blockedWords" defaultValue={getNested(settings, "task.coverAndCopy.blockedWords", "")} />
-              </div>
-              <PromptField name="task.coverAndCopy.descriptionTemplate" label="描述模板" defaultValue={getNested(settings, "task.coverAndCopy.descriptionTemplate", "")} />
-            </SettingsAccordionItem>
-
-            <SettingsAccordionItem value="render" title="渲染" description="生成最终视频文件。字号和行距是比例系数，不是固定像素。">
-              <FieldControl label="渲染输出位置" help="最终 mp4、封面图、渲染日志会输出到这里。">
-                <Input name="task.render.outputDir" defaultValue={getNested(settings, "task.render.outputDir", "")} />
-              </FieldControl>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <SwitchRow label="渲染评论" name="task.render.renderComments" defaultChecked={getNested(settings, "task.render.renderComments", true)} />
-                <SelectField name="task.render.commentStyle" label="评论样式模板" defaultValue={getNested(settings, "task.render.commentStyle", "classic-dark")} options={[["classic-dark", "经典深色"], ["light", "轻量白色"], ["bilibili", "B 站风"], ["douyin", "抖音风"], ["xiaohongshu", "小红书风"]]} />
-                <SelectField name="task.render.commentFontSize" label="评论字号" help="基于输出分辨率的比例系数。" defaultValue={getNested(settings, "task.render.commentFontSize", "medium")} options={[["small", "小"], ["medium", "中"], ["large", "大"]]} />
-                <SelectField name="task.render.commentLineHeight" label="评论行距" defaultValue={getNested(settings, "task.render.commentLineHeight", "standard")} options={[["compact", "紧凑"], ["standard", "标准"], ["loose", "宽松"]]} />
-                <SelectField name="task.render.subtitleFontSize" label="字幕字号" defaultValue={getNested(settings, "task.render.subtitleFontSize", "medium")} options={[["small", "小"], ["medium", "中"], ["large", "大"]]} />
-                <SelectField name="task.render.subtitleLineHeight" label="字幕行距" defaultValue={getNested(settings, "task.render.subtitleLineHeight", "standard")} options={[["compact", "紧凑"], ["standard", "标准"], ["loose", "宽松"]]} />
-                <SelectField name="task.render.commentContent" label="评论显示内容" defaultValue={getNested(settings, "task.render.commentContent", "original-translated")} options={[["original-translated", "原文 + 译文"], ["translated-only", "仅译文"], ["auto", "自动"]]} />
-                <SelectField name="task.render.longCommentBehavior" label="长评论换行" defaultValue={getNested(settings, "task.render.longCommentBehavior", "wrap")} options={[["wrap", "自动换行"], ["truncate", "截断"], ["shrink", "缩小字号"]]} />
-                <SelectField name="task.render.commentSpeed" label="评论滚动速度" defaultValue={getNested(settings, "task.render.commentSpeed", "standard")} options={[["slow", "慢"], ["standard", "标准"], ["fast", "快"]]} />
-                <LabelInput label="重复次数" name="task.render.repeatTimes" type="number" min={1} max={10} defaultValue={getNested(settings, "task.render.repeatTimes", 1)} />
-                <SelectField name="task.render.outputFormat" label="输出格式" defaultValue={getNested(settings, "task.render.outputFormat", "mp4")} options={[["mp4", "mp4"], ["mov", "mov"]]} />
-              </div>
-            </SettingsAccordionItem>
-
-            <SettingsAccordionItem value="publish" title="保存草稿与发布" description="保存平台草稿和立即发布都会走平台流程，区别是是否点击最终发布按钮。">
-              <FieldControl label="默认平台" help="新任务默认使用的平台。">
-                {platformChooser(settingsTargets, setSettingsTargets)}
-              </FieldControl>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <SelectField name="task.publish.defaultAction" label="默认动作" help="保存平台草稿只保存到平台后台，不点击最终发布。" defaultValue={getNested(settings, "task.publish.defaultAction", "publish")} options={[["draft", "保存平台草稿"], ["publish", "立即发布"]]} />
-                <LabelInput label="发布失败重试次数" name="task.publish.retryCount" type="number" min={0} max={10} defaultValue={getNested(settings, "task.publish.retryCount", 1)} />
-                <SwitchRow label="检查登录态" name="task.publish.preflightChecks.login" defaultChecked={getNested(settings, "task.publish.preflightChecks.login", true)} />
-                <SwitchRow label="检查文件" name="task.publish.preflightChecks.files" defaultChecked={getNested(settings, "task.publish.preflightChecks.files", true)} />
-                <SwitchRow label="检查文案" name="task.publish.preflightChecks.copy" defaultChecked={getNested(settings, "task.publish.preflightChecks.copy", true)} />
-                <SwitchRow label="检查平台支持" name="task.publish.preflightChecks.adapter" defaultChecked={getNested(settings, "task.publish.preflightChecks.adapter", true)} />
-              </div>
-              <Separator />
-              <div className="grid gap-3 md:grid-cols-2">
-                <LabelInput label="B 站分区" name="task.publish.platformConfigs.bilibili.category" defaultValue={getNested(settings, "task.publish.platformConfigs.bilibili.category", "汽车")} />
-                <LabelInput label="B 站标签" name="task.publish.platformConfigs.bilibili.tags" defaultValue={getNested(settings, "task.publish.platformConfigs.bilibili.tags", "")} />
-                <LabelInput label="抖音话题" name="task.publish.platformConfigs.douyin.topics" defaultValue={getNested(settings, "task.publish.platformConfigs.douyin.topics", "")} />
-                <LabelInput label="小红书话题" name="task.publish.platformConfigs.xiaohongshu.topics" defaultValue={getNested(settings, "task.publish.platformConfigs.xiaohongshu.topics", "")} />
-                <LabelInput label="YouTube 标签" name="task.publish.platformConfigs.youtube.tags" defaultValue={getNested(settings, "task.publish.platformConfigs.youtube.tags", "")} />
-              </div>
-            </SettingsAccordionItem>
-          </Accordion>
-        </TabsContent>
-
-        <TabsContent value="llm" className="grid gap-4">
-          <SettingsSection title="服务模式" description="可以使用内置服务，也可以自己配置模型。">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <SelectField name="llm.serviceMode" label="服务模式" help="内置服务未来用于售卖；用户不需要填 API Key。" defaultValue={getNested(settings, "llm.serviceMode", "managed")} options={[["managed", "使用内置服务"], ["custom", "自己配置模型"]]} />
-              <SelectField name="llm.provider" label="模型厂商" defaultValue={getNested(settings, "llm.provider", "managed")} options={[["managed", "内置服务"], ["openai", "OpenAI"], ["anthropic", "Anthropic Claude"], ["gemini", "Google Gemini"], ["deepseek", "DeepSeek"], ["qwen", "Qwen / 百炼"], ["doubao", "Doubao / 火山方舟"], ["kimi", "Moonshot / Kimi"], ["glm", "Zhipu GLM"], ["openrouter", "OpenRouter"], ["ollama", "Ollama"], ["custom", "自定义 OpenAI-compatible"]]} />
-              <LabelInput label="Base URL" name="llm.baseUrl" defaultValue={getNested(settings, "llm.baseUrl", "")} />
-              <LabelInput label="API Key 环境变量" name="llm.apiKeyEnv" defaultValue={getNested(settings, "llm.apiKeyEnv", "OPENAI_API_KEY")} />
-              <LabelInput label="默认文本模型" help="用于翻译、标题、描述、标签、评论文案等文字生成任务。" name="llm.textModel" defaultValue={getNested(settings, "llm.textModel", "gpt-4.1-mini")} />
-              <LabelInput label="默认视觉模型" help="用于看视频截图、选择封面画面、理解图片内容；不需要时可以留空。" name="llm.visionModel" defaultValue={getNested(settings, "llm.visionModel", "gpt-4.1-mini")} />
-              <SelectField name="llm.thinking" label="Thinking / Reasoning" help="开启后模型会花更多时间推理；翻译通常不需要高等级。" defaultValue={getNested(settings, "llm.thinking", "auto")} options={[["off", "关闭"], ["auto", "自动"], ["low", "低"], ["medium", "中"], ["high", "高"]]} />
-              <SelectField name="llm.temperatureMode" label="温度" help="稳定更像翻译工具；创意更适合标题和营销文案。" defaultValue={getNested(settings, "llm.temperatureMode", "balanced")} options={[["stable", "稳定"], ["balanced", "平衡"], ["creative", "创意"]]} />
-              <SelectField name="llm.maxOutputMode" label="最大输出长度" defaultValue={getNested(settings, "llm.maxOutputMode", "standard")} options={[["short", "短"], ["standard", "标准"], ["long", "长"]]} />
-              <LabelInput label="超时秒数" name="llm.timeoutSec" type="number" defaultValue={getNested(settings, "llm.timeoutSec", 120)} />
-              <LabelInput label="重试次数" name="llm.retryCount" type="number" defaultValue={getNested(settings, "llm.retryCount", 2)} />
+    <form
+      ref={formRef}
+      className="grid gap-4"
+      onSubmit={(e) => e.preventDefault()}
+      onChange={(e) => scheduleSave(e.currentTarget)}
+    >
+      <div className="grid gap-6 lg:grid-cols-[200px_minmax(0,1fr)]">
+        <nav className="flex flex-col gap-5 lg:border-r lg:pr-4">
+          {settingsGroups.map((group) => (
+            <div key={group.group} className="grid gap-1">
+              <div className="px-2.5 pb-1 font-medium text-muted-foreground text-xs uppercase tracking-wider">{group.group}</div>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const active = activeSettings === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setActiveSettings(item.id)}
+                    className={cn(
+                      "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
+                      active ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="size-4 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                );
+              })}
             </div>
-            <p className="rounded-lg border bg-muted/40 px-3 py-2 text-muted-foreground text-xs">默认文本模型会用于字幕翻译、评论翻译、标题、描述、标签/话题和封面文案生成。默认视觉模型只用于封面画面选择。</p>
-          </SettingsSection>
-        </TabsContent>
+          ))}
+        </nav>
 
-        <TabsContent value="agent" className="grid gap-4">
-          <SettingsSection title="个人 Agent 连接" description="这里先做 UI 配置，用于未来一键连接 OpenClaw、Hermes、WorkBuddy 等个人 Agent。">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="min-w-0 max-w-xl">
+          <SettingsPane active={activeSettings} id="download">
+            <div className="rounded-lg border bg-card px-4 py-1">
+              <PathField name="task.storage.taskDataDir" label="任务数据缓存位置" help="每个任务的全部中间数据（源视频、字幕、评论、规范化与翻译产物等）都会按任务存放在这里；渲染成品另由「渲染输出位置」管理。" defaultValue={getNested(settings, "task.storage.taskDataDir", "")} onChanged={() => { if (formRef.current) scheduleSave(formRef.current, 300); }} />
+              <SelectField name="task.download.videoQuality" label="默认视频下载分辨率" help="默认期望下载的分辨率。平台不提供时自动向下兼容更低分辨率。" defaultValue={getNested(settings, "task.download.videoQuality", "auto")} options={[["auto", "自动"], ["best", "最高清"], ["8k", "8K"], ["4k", "4K"], ["2k", "2K"], ["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]]} optionHelp={{ auto: "由 yt-dlp 自动选择最合适的格式", best: "下载平台提供的最高分辨率（可能超过 8K）", "8k": "目标 8K（4320p），不存在则向下兼容更低分辨率", "4k": "目标 4K（2160p），不存在则向下兼容更低分辨率", "2k": "目标 2K（1440p），不存在则向下兼容更低分辨率", "1080p": "目标 1080p，不存在则向下兼容更低分辨率", "720p": "目标 720p，不存在则向下兼容更低分辨率", "480p": "目标 480p，不存在则向下兼容更低分辨率" }} />
+              <LabelInput label="每条评论秒数" help="例如视频 60 秒、每条评论 2 秒，目标约 30 条。" name="task.download.commentSeconds" type="number" min={0.5} step={0.5} defaultValue={getNested(settings, "task.download.commentSeconds", 2)} className="w-20" />
+              <LabelInput label="最大评论数" help="防止超长视频下载过多评论。" name="task.download.maxComments" type="number" min={1} max={5000} defaultValue={getNested(settings, "task.download.maxComments", 800)} className="w-20" />
+              <LabelInput label="下载重试次数" name="task.download.retryCount" type="number" min={0} max={10} defaultValue={getNested(settings, "task.download.retryCount", 2)} className="w-20" />
+              <LabelInput label="下载超时秒数" name="task.download.timeoutSec" type="number" min={30} defaultValue={getNested(settings, "task.download.timeoutSec", 600)} className="w-20" />
+            </div>
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="prepare">
+            <div className="rounded-lg border bg-card px-4 py-1">
+              <SelectField name="task.prepare.outputAspect" label="默认输出画幅" help="短视频默认建议竖屏；横屏源视频会按适配方式处理。" defaultValue={getNested(settings, "task.prepare.outputAspect", "portrait")} options={[["portrait", "竖屏 9:16"], ["landscape", "横屏 16:9"], ["source", "保持原视频"]]} optionHelp={{ portrait: "输出 9:16 竖屏，适合短视频平台", landscape: "输出 16:9 横屏，适合 YouTube 等平台", source: "保持源视频原始比例，不做任何裁切" }} selectClassName="w-36" />
+              <SelectField name="task.prepare.outputResolution" label="默认输出分辨率" help="最终渲染目标分辨率，选项与下载分辨率一致。" defaultValue={getNested(settings, "task.prepare.outputResolution", "auto")} options={[["auto", "自动"], ["best", "最高清"], ["8k", "8K"], ["4k", "4K"], ["2k", "2K"], ["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]]} optionHelp={{ auto: "跟随下载分辨率，不做额外缩放", best: "输出可用的最高分辨率", "8k": "目标 8K（4320p）", "4k": "目标 4K（2160p）", "2k": "目标 2K（1440p）", "1080p": "目标 1080p", "720p": "目标 720p", "480p": "目标 480p" }} selectClassName="w-36" />
+              <SelectField name="task.prepare.fitMode" label="画面适配方式" help="用于处理源视频比例和输出比例不一致的情况。" defaultValue={getNested(settings, "task.prepare.fitMode", "smart-crop")} options={[["smart-crop", "智能裁剪"], ["blur-background", "模糊背景补边"], ["keep-bars", "黑边保留"], ["center-crop", "居中裁剪"]]} optionHelp={{ "smart-crop": "AI 检测主体位置，智能居中裁剪，尽量保留画面重点", "blur-background": "将源视频缩放后居中，两侧用模糊背景填充，无内容损失", "keep-bars": "保持比例缩放，用黑边填充，内容完整但观感较差", "center-crop": "严格居中裁剪，不做智能识别，速度更快" }} selectClassName="w-36" />
+              <SelectField name="task.prepare.subtitleCleanup" label="字幕整理" help="自动合并可以减少字幕过碎导致的闪烁。" defaultValue={getNested(settings, "task.prepare.subtitleCleanup", "merge-short")} options={[["merge-short", "自动合并短句"], ["keep", "保持原样"]]} optionHelp={{ "merge-short": "自动合并过短或间隔过近的字幕段，减少屏幕闪烁", keep: "保持字幕原始分段，适合有精确时间轴要求的场景" }} selectClassName="w-36" />
+            </div>
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="translation">
+            <div className="rounded-lg border bg-card px-4 py-1">
+              <SelectField name="task.translation.targetLanguage" label="目标语言" defaultValue={getNested(settings, "task.translation.targetLanguage", "zh-CN")} options={languages.map((code) => [code, t(`languages.${code}`)])} selectClassName="w-36" />
+              <SelectField name="task.translation.subtitleMode" label="字幕翻译" help="自动会根据来源语言和目标语言判断是否翻译。" defaultValue={getNested(settings, "task.translation.subtitleMode", "auto")} options={[["auto", "自动"], ["always", "总是翻译"], ["off", "不翻译"]]} optionHelp={{ auto: "根据来源语言和目标语言自动决定是否翻译", always: "不论来源语言，始终翻译字幕", off: "不翻译字幕，保持原文" }} selectClassName="w-36" />
+              <SelectField name="task.translation.commentMode" label="评论翻译" help="自动会根据来源语言和目标语言判断是否翻译。" defaultValue={getNested(settings, "task.translation.commentMode", "auto")} options={[["auto", "自动"], ["always", "总是翻译"], ["off", "不翻译"]]} optionHelp={{ auto: "根据来源语言和目标语言自动决定是否翻译", always: "不论来源语言，始终翻译评论", off: "不翻译评论，保持原文" }} selectClassName="w-36" />
+              <SwitchRow label="双语字幕" name="task.translation.bilingualSubtitles" help="开启后字幕同时显示原文和译文。" defaultChecked={getNested(settings, "task.translation.bilingualSubtitles", false)} />
+              <SelectField name="task.translation.sensitiveContent" label="敏感内容处理" help="不单独设置审核提示词，统一由这里和通用提示词控制。" defaultValue={getNested(settings, "task.translation.sensitiveContent", "preserve")} options={[["preserve", "保留原意"], ["soften", "温和改写"], ["mark", "标记但保留"], ["delete", "删除"]]} optionHelp={{ preserve: "完整翻译，不做任何修改，保留原意", soften: "改写争议性表达，使语气更温和，适合全年龄平台", mark: "在敏感内容前后加注标记，提示人工审查", delete: "直接删除识别到的敏感内容片段" }} selectClassName="w-36" />
+            </div>
+            <FieldControl label="风格约束" help="可多选，用逗号分隔。">
+              <Input name="task.translation.styleConstraints" defaultValue={listValue(getNested<JsonValue | undefined>(settings, "task.translation.styleConstraints", undefined), ["自然口语", "本土化表达"])} placeholder={styleConstraintOptions.join("，")} />
+            </FieldControl>
+            <div className="grid gap-3">
+              <PromptField name="task.translation.prompts.subtitle" label="字幕翻译额外提示词" defaultValue={getNested(settings, "task.translation.prompts.subtitle", "")} />
+              <PromptField name="task.translation.prompts.comment" label="评论翻译额外提示词" defaultValue={getNested(settings, "task.translation.prompts.comment", "")} />
+            </div>
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="cover">
+            <CoverCopyPane settings={settings} onChanged={() => { if (formRef.current) scheduleSave(formRef.current, 300); }} />
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="render">
+            <div className="rounded-lg border bg-card px-4 py-1">
+              <PathField name="task.render.outputDir" label="渲染输出位置" help="最终 mp4、封面图、渲染日志会输出到这里。" defaultValue={getNested(settings, "task.render.outputDir", "")} onChanged={() => { if (formRef.current) scheduleSave(formRef.current, 300); }} />
+              <SwitchRow label="渲染评论" name="task.render.renderComments" help="开启后在视频上叠加评论弹幕效果。" defaultChecked={getNested(settings, "task.render.renderComments", true)} />
+              <SelectField name="task.render.commentFontSize" label="评论字号" help="基于输出分辨率的比例系数。" defaultValue={getNested(settings, "task.render.commentFontSize", "medium")} options={[["small", "小"], ["medium", "中"], ["large", "大"]]} optionHelp={{ small: "字号较小，适合评论密集的内容", medium: "标准字号，适合大多数场景", large: "字号较大，适合横屏或在小屏幕查看" }} selectClassName="w-28" />
+              <SelectField name="task.render.commentLineHeight" label="评论行距" help="控制评论行与行之间的间距。" defaultValue={getNested(settings, "task.render.commentLineHeight", "standard")} options={[["compact", "紧凑"], ["standard", "标准"], ["loose", "宽松"]]} optionHelp={{ compact: "紧凑行距，单屏可显示更多评论", standard: "标准行距，阅读体验均衡", loose: "宽松行距，提高可读性" }} selectClassName="w-28" />
+              <SelectField name="task.render.subtitleFontSize" label="字幕字号" help="基于输出分辨率的比例系数。" defaultValue={getNested(settings, "task.render.subtitleFontSize", "medium")} options={[["small", "小"], ["medium", "中"], ["large", "大"]]} optionHelp={{ small: "字号较小，适合字幕较密集的内容", medium: "标准字号，适合大多数场景", large: "字号较大，提高可读性" }} selectClassName="w-28" />
+              <SelectField name="task.render.subtitleLineHeight" label="字幕行距" help="控制字幕行与行之间的间距。" defaultValue={getNested(settings, "task.render.subtitleLineHeight", "standard")} options={[["compact", "紧凑"], ["standard", "标准"], ["loose", "宽松"]]} optionHelp={{ compact: "紧凑行距，减少字幕占用画面空间", standard: "标准行距，阅读体验均衡", loose: "宽松行距，提高可读性" }} selectClassName="w-28" />
+              <SelectField name="task.render.commentContent" label="评论显示内容" help="控制评论显示原文还是译文。" defaultValue={getNested(settings, "task.render.commentContent", "original-translated")} options={[["original-translated", "原文 + 译文"], ["translated-only", "仅译文"]]} optionHelp={{ "original-translated": "同时显示原文和译文，适合双语对比场景", "translated-only": "只显示翻译后的内容" }} selectClassName="w-28" />
+              <SelectField name="task.render.longCommentBehavior" label="长评论换行" help="当评论内容超出单行宽度时的处理方式。" defaultValue={getNested(settings, "task.render.longCommentBehavior", "wrap")} options={[["wrap", "自动换行"], ["truncate", "截断"], ["shrink", "缩小字号"]]} optionHelp={{ wrap: "自动换行，保留完整内容", truncate: "超长内容截断并显示省略号", shrink: "保持单行，自动缩小字号" }} selectClassName="w-28" />
+              <LabelInput label="重复次数" help="将视频内容重复拼接的次数，用于制作循环内容。" name="task.render.repeatTimes" type="number" min={1} max={10} defaultValue={getNested(settings, "task.render.repeatTimes", 1)} className="w-28" />
+              <SelectField name="task.render.outputFormat" label="输出格式" help="最终视频文件的封装格式。" defaultValue={getNested(settings, "task.render.outputFormat", "mp4")} options={[["mp4", "mp4"], ["mov", "mov"]]} optionHelp={{ mp4: "H.264/H.265 封装，兼容性最佳，适合所有平台", mov: "QuickTime 容器，适合特定编辑软件或 ProRes 场景" }} selectClassName="w-28" />
+            </div>
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="publish">
+            <Tabs defaultValue="bilibili">
+              <TabsList className="flex h-auto w-full gap-1 rounded-lg bg-muted p-1">
+                {targetPlatforms.map((platform) => (
+                  <TabsTrigger key={platform} value={platform} className="flex-1">
+                    {platformNames[platform] || platform}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {targetPlatforms.map((platform) => (
+                <TabsContent key={platform} value={platform} className="mt-4">
+                  <div className="grid gap-4">
+                    {/* 通用 */}
+                    <div className="rounded-lg border bg-card px-4 py-1">
+                      <div className="py-3"><h3 className="font-medium text-sm">通用</h3></div>
+                      <SettingRow label="启用" help="是否将此平台加入新任务的默认目标平台列表。">
+                        <Switch
+                          checked={settingsTargets.includes(platform)}
+                          onCheckedChange={(checked) => {
+                            setSettingsTargets((prev) => checked ? [...prev, platform] : prev.filter((p) => p !== platform));
+                            setSettingsTargetsVersion((v) => v + 1);
+                          }}
+                        />
+                      </SettingRow>
+                      <SelectField name={`task.publish.platformConfigs.${platform}.defaultAction`} label="默认动作" help="保存草稿不立即公开；直接发布立即对外可见。" defaultValue={getNested(settings, `task.publish.platformConfigs.${platform}.defaultAction`, "publish")} options={[["draft", "保存草稿"], ["publish", "立即发布"]]} optionHelp={{ draft: "完成处理后保存为平台草稿，不立即公开", publish: "完成处理后直接发布，立即对外公开" }} selectClassName="w-48" />
+                      <LabelInput label="失败重试次数" help="发布失败后的最大重试次数。" name={`task.publish.platformConfigs.${platform}.retryCount`} type="number" min={0} max={10} defaultValue={getNested(settings, `task.publish.platformConfigs.${platform}.retryCount`, 1)} className="w-48" />
+                    </div>
+                    {/* 平台特殊配置 */}
+                    <div className="rounded-lg border bg-card px-4 py-1">
+                      <div className="py-3"><h3 className="font-medium text-sm">平台特殊配置</h3></div>
+                      {platform === "bilibili" && (<>
+                        <SelectField name="task.publish.platformConfigs.bilibili.category" label="分区" help="B 站视频投稿分区。" defaultValue={getNested(settings, "task.publish.platformConfigs.bilibili.category", "汽车")} options={[["影视", "影视"], ["娱乐", "娱乐"], ["音乐", "音乐"], ["舞蹈", "舞蹈"], ["动画", "动画"], ["绘画", "绘画"], ["鬼畜", "鬼畜"], ["游戏", "游戏"], ["资讯", "资讯"], ["知识", "知识"], ["人工智能", "人工智能"], ["科技数码", "科技数码"], ["汽车", "汽车"], ["时尚美妆", "时尚美妆"], ["家装房产", "家装房产"], ["户外潮流", "户外潮流"], ["健身", "健身"], ["体育运动", "体育运动"], ["手工", "手工"], ["美食", "美食"], ["小剧场", "小剧场"], ["旅游出行", "旅游出行"], ["三农", "三农"], ["动物", "动物"], ["亲子", "亲子"], ["健康", "健康"], ["情感", "情感"], ["vlog", "vlog"], ["生活兴趣", "生活兴趣"], ["生活经验", "生活经验"]]} selectClassName="w-48" />
+                        <SelectField name="task.publish.platformConfigs.bilibili.declaration" label="创作声明" help="B 站发布时的创作声明标注。" defaultValue={getNested(settings, "task.publish.platformConfigs.bilibili.declaration", "内容为转载")} options={[["内容无需标注", "内容无需标注"], ["含AI生成内容", "含AI生成内容"], ["含虚构演绎内容", "含虚构演绎内容"], ["内容含营销信息", "内容含营销信息"], ["个人观点仅供参考", "个人观点仅供参考"], ["内容为转载", "内容为转载"], ["内容为自制：未经作者允许禁止转载", "内容为自制：未经作者允许禁止转载"]]} selectClassName="w-48" />
+                        <LabelInput label="固定标签" help="与 AI 生成的标签一起发布，优先级高于 AI 生成的标签。" name="task.publish.platformConfigs.bilibili.tags" defaultValue={getNested(settings, "task.publish.platformConfigs.bilibili.tags", "")} className="w-48" />
+                      </>)}
+                      {platform === "douyin" && (<>
+                        <SelectField name="task.publish.platformConfigs.douyin.declarationType" label="声明类型" help="转载需声明来源；原创需满足抖音原创要求。" defaultValue={getNested(settings, "task.publish.platformConfigs.douyin.declarationType", "转载")} options={[["转载", "转载"], ["原创", "原创"]]} optionHelp={{ "转载": "声明为转载内容，需注明来源", "原创": "声明为原创内容，须符合平台原创认定标准" }} selectClassName="w-48" />
+                        <SelectField name="task.publish.platformConfigs.douyin.visibility" label="可见性" help="控制谁可以看到这个视频。" defaultValue={getNested(settings, "task.publish.platformConfigs.douyin.visibility", "公开")} options={[["公开", "公开"], ["好友可见", "好友可见"], ["仅自己", "仅自己"]]} optionHelp={{ "公开": "所有人均可查看", "好友可见": "仅互相关注的好友可查看", "仅自己": "仅自己可见，适合暂存草稿" }} selectClassName="w-48" />
+                        <LabelInput label="话题" help="空格分隔的话题标签，不需要加 #。" name="task.publish.platformConfigs.douyin.topics" defaultValue={getNested(settings, "task.publish.platformConfigs.douyin.topics", "")} className="w-48" />
+                      </>)}
+                      {platform === "xiaohongshu" && (<>
+                        <SelectField name="task.publish.platformConfigs.xiaohongshu.visibility" label="可见性" help="控制谁可以看到这篇笔记。" defaultValue={getNested(settings, "task.publish.platformConfigs.xiaohongshu.visibility", "公开")} options={[["公开", "公开"], ["仅自己", "仅自己"]]} optionHelp={{ "公开": "所有人均可查看", "仅自己": "仅自己可见" }} selectClassName="w-48" />
+                        <LabelInput label="话题" help="空格分隔的话题标签，不需要加 #。" name="task.publish.platformConfigs.xiaohongshu.topics" defaultValue={getNested(settings, "task.publish.platformConfigs.xiaohongshu.topics", "")} className="w-48" />
+                      </>)}
+                      {platform === "youtube" && (<>
+                        <LabelInput label="分类" help="YouTube 视频分类，如 Autos & Vehicles。" name="task.publish.platformConfigs.youtube.category" defaultValue={getNested(settings, "task.publish.platformConfigs.youtube.category", "Autos & Vehicles")} className="w-48" />
+                        <SelectField name="task.publish.platformConfigs.youtube.visibility" label="可见性" help="控制谁可以看到这个视频。" defaultValue={getNested(settings, "task.publish.platformConfigs.youtube.visibility", "private")} options={[["public", "Public"], ["unlisted", "Unlisted"], ["private", "Private"]]} optionHelp={{ "public": "所有人均可搜索和查看", "unlisted": "有链接的人可查看，不在搜索结果中出现", "private": "仅自己可见，适合暂存或审阅" }} selectClassName="w-48" />
+                        <LabelInput label="标签" help="逗号分隔的关键词标签。" name="task.publish.platformConfigs.youtube.tags" defaultValue={getNested(settings, "task.publish.platformConfigs.youtube.tags", "")} className="w-48" />
+                      </>)}
+                      {platform === "tiktok" && (<>
+                        <SelectField name="task.publish.platformConfigs.tiktok.privacy" label="可见性" help="控制谁可以看到这个视频。" defaultValue={getNested(settings, "task.publish.platformConfigs.tiktok.privacy", "SELF_ONLY")} options={[["PUBLIC_TO_EVERYONE", "所有人"], ["MUTUAL_FOLLOW_FRIENDS", "互关好友"], ["FOLLOWER_OF_CREATOR", "我的粉丝"], ["SELF_ONLY", "仅自己"]]} optionHelp={{ "PUBLIC_TO_EVERYONE": "任何人都可以查看", "MUTUAL_FOLLOW_FRIENDS": "仅互相关注的用户可查看", "FOLLOWER_OF_CREATOR": "仅关注你的用户可查看", "SELF_ONLY": "仅自己可见，适合测试和审阅" }} selectClassName="w-48" />
+                        <SwitchRow label="允许评论" name="task.publish.platformConfigs.tiktok.allowComment" help="允许其他用户在视频下评论。" defaultChecked={getNested(settings, "task.publish.platformConfigs.tiktok.allowComment", true)} />
+                        <SwitchRow label="允许 Duet" name="task.publish.platformConfigs.tiktok.allowDuet" help="允许其他用户与此视频合拍。" defaultChecked={getNested(settings, "task.publish.platformConfigs.tiktok.allowDuet", false)} />
+                        <SwitchRow label="允许 Stitch" name="task.publish.platformConfigs.tiktok.allowStitch" help="允许其他用户截取此视频拼接到自己的作品中。" defaultChecked={getNested(settings, "task.publish.platformConfigs.tiktok.allowStitch", false)} />
+                        <SwitchRow label="AI 生成内容声明" name="task.publish.platformConfigs.tiktok.isAigc" help="声明视频为 AI 辅助生成内容（AIGC）。" defaultChecked={getNested(settings, "task.publish.platformConfigs.tiktok.isAigc", false)} />
+                      </>)}
+                      {platform === "instagram" && (<>
+                        <SelectField name="task.publish.platformConfigs.instagram.visibility" label="可见性" help="控制谁可以看到这个帖子。" defaultValue={getNested(settings, "task.publish.platformConfigs.instagram.visibility", "private")} options={[["public", "Public"], ["private", "Private"]]} optionHelp={{ "public": "所有人均可查看", "private": "仅粉丝可查看（需要申请关注）" }} selectClassName="w-48" />
+                        <LabelInput label="Hashtags" help="空格分隔的标签，不需要加 #。" name="task.publish.platformConfigs.instagram.hashtags" defaultValue={getNested(settings, "task.publish.platformConfigs.instagram.hashtags", "")} className="w-48" />
+                      </>)}
+                      {platform === "x" && (<>
+                        <SelectField name="task.publish.platformConfigs.x.replySettings" label="回复权限" help="控制谁可以回复这条推文。" defaultValue={getNested(settings, "task.publish.platformConfigs.x.replySettings", "everyone")} options={[["everyone", "所有人"], ["followers", "关注者"], ["mentioned_users", "仅被提及的人"]]} optionHelp={{ "everyone": "任何人都可以回复", "followers": "仅关注你的用户可以回复", "mentioned_users": "仅在推文中被提及的用户可以回复" }} selectClassName="w-48" />
+                        <SwitchRow label="标记为敏感内容" name="task.publish.platformConfigs.x.isSensitive" help="将帖子标记为敏感内容，查看时需要点击确认。" defaultChecked={getNested(settings, "task.publish.platformConfigs.x.isSensitive", false)} />
+                        <LabelInput label="Hashtags" help="空格分隔的标签，不需要加 #。" name="task.publish.platformConfigs.x.hashtags" defaultValue={getNested(settings, "task.publish.platformConfigs.x.hashtags", "")} className="w-48" />
+                      </>)}
+                    </div>
+                    {/* 额外提示词 */}
+                    <div className="grid gap-3">
+                      <PromptField name={`task.publish.platformConfigs.${platform}.prompts.title`} label="标题额外提示词" defaultValue={getNested(settings, `task.publish.platformConfigs.${platform}.prompts.title`, "")} />
+                      <PromptField name={`task.publish.platformConfigs.${platform}.prompts.description`} label="描述额外提示词" defaultValue={getNested(settings, `task.publish.platformConfigs.${platform}.prompts.description`, "")} />
+                      <PromptField name={`task.publish.platformConfigs.${platform}.prompts.tags`} label="标签/话题额外提示词" defaultValue={getNested(settings, `task.publish.platformConfigs.${platform}.prompts.tags`, "")} />
+                    </div>
+                  </div>
+                </TabsContent>
+              ))}
+            </Tabs>
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="llm">
+            <SettingsSection title="服务模式" description="可以使用内置服务，也可以自己配置模型。">
+              <SelectField name="llm.serviceMode" label="服务模式" help="内置服务未来用于售卖；用户不需要填 API Key。" defaultValue={getNested(settings, "llm.serviceMode", "managed")} options={[["managed", "使用内置服务"], ["custom", "自己配置模型"]]} optionHelp={{ managed: "使用平台提供的内置服务，无需自己配置 API Key", custom: "自行配置模型和 API Key，完全掌控调用方式和费用" }} />
+              <SelectField name="llm.provider" label="模型厂商" help="选择要使用的大模型服务商。" defaultValue={getNested(settings, "llm.provider", "managed")} options={[["managed", "内置服务"], ["openai", "OpenAI"], ["anthropic", "Anthropic Claude"], ["gemini", "Google Gemini"], ["deepseek", "DeepSeek"], ["qwen", "Qwen / 百炼"], ["doubao", "Doubao / 火山方舟"], ["kimi", "Moonshot / Kimi"], ["glm", "Zhipu GLM"], ["openrouter", "OpenRouter"], ["ollama", "Ollama"], ["custom", "自定义 OpenAI-compatible"]]} />
+              <LabelInput label="Base URL" help="模型服务的 API 基础地址，留空使用厂商默认值。" name="llm.baseUrl" defaultValue={getNested(settings, "llm.baseUrl", "")} className="w-56" />
+              <LabelInput label="API Key 环境变量" help="存放 API Key 的环境变量名称，避免直接明文填写密钥。" name="llm.apiKeyEnv" defaultValue={getNested(settings, "llm.apiKeyEnv", "OPENAI_API_KEY")} className="w-44" />
+              <LabelInput label="默认文本模型" help="用于翻译、标题、描述、标签、评论文案等文字生成任务。" name="llm.textModel" defaultValue={getNested(settings, "llm.textModel", "gpt-4.1-mini")} className="w-44" />
+              <LabelInput label="默认视觉模型" help="用于看视频截图、选择封面画面、理解图片内容；不需要时可以留空。" name="llm.visionModel" defaultValue={getNested(settings, "llm.visionModel", "gpt-4.1-mini")} className="w-44" />
+              <SelectField name="llm.thinking" label="Thinking / Reasoning" help="开启后模型会花更多时间推理；翻译通常不需要高等级。" defaultValue={getNested(settings, "llm.thinking", "auto")} options={[["off", "关闭"], ["auto", "自动"], ["low", "低"], ["medium", "中"], ["high", "高"]]} optionHelp={{ off: "不使用推理步骤，响应最快，适合简单翻译任务", auto: "模型自动决定是否启用推理，平衡速度与质量", low: "较短推理链，轻微提升复杂任务质量", medium: "中等推理深度，适合需要多步思考的内容", high: "深度推理，质量最好，但响应较慢且成本更高" }} />
+              <SelectField name="llm.temperatureMode" label="温度" help="稳定更像翻译工具；创意更适合标题和营销文案。" defaultValue={getNested(settings, "llm.temperatureMode", "balanced")} options={[["stable", "稳定"], ["balanced", "平衡"], ["creative", "创意"]]} optionHelp={{ stable: "输出稳定可复现，适合精确翻译和格式化任务", balanced: "平衡创意与稳定，适合大多数任务", creative: "更多样化的输出，适合营销文案、标题生成等创意任务" }} />
+              <SelectField name="llm.maxOutputMode" label="最大输出长度" help="限制模型单次生成的 token 数量。" defaultValue={getNested(settings, "llm.maxOutputMode", "standard")} options={[["short", "短"], ["standard", "标准"], ["long", "长"]]} optionHelp={{ short: "限制单次输出长度，适合短字幕或标题", standard: "标准输出长度，适合大多数内容", long: "允许长输出，适合长视频字幕批量翻译" }} />
+              <LabelInput label="超时秒数" name="llm.timeoutSec" type="number" defaultValue={getNested(settings, "llm.timeoutSec", 120)} className="w-20" />
+              <LabelInput label="重试次数" name="llm.retryCount" type="number" defaultValue={getNested(settings, "llm.retryCount", 2)} className="w-16" />
+              <p className="py-2 text-muted-foreground text-xs">默认文本模型会用于字幕翻译、评论翻译、标题、描述、标签/话题和封面文案生成。默认视觉模型只用于封面画面选择。</p>
+            </SettingsSection>
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="agent">
+            <SettingsSection title="个人 Agent 连接" description="这里先做 UI 配置，用于未来一键连接 OpenClaw、Hermes、WorkBuddy 等个人 Agent。">
               <SwitchRow label="启用 Agent" name="agent.enabled" defaultChecked={getNested(settings, "agent.enabled", false)} />
               <SelectField name="agent.type" label="Agent 类型" defaultValue={getNested(settings, "agent.type", "openclaw")} options={[["openclaw", "OpenClaw"], ["hermes", "Hermes"], ["workbuddy", "WorkBuddy"], ["custom", "自定义"]]} />
               <SelectField name="agent.connectionMode" label="连接方式" defaultValue={getNested(settings, "agent.connectionMode", "local-app")} options={[["local-app", "本机应用"], ["browser-extension", "浏览器扩展"], ["cloud", "云服务"], ["webhook", "自定义 Webhook"]]} />
               <SelectField name="agent.handoffMode" label="接管范围" help="只通知最安全；自动处理适合完全信任的个人 Agent。" defaultValue={getNested(settings, "agent.handoffMode", "notify-only")} options={[["notify-only", "只通知"], ["ask-before-action", "询问后处理"], ["auto", "自动处理"]]} />
-              <LabelInput label="Agent Token / 连接密钥" name="agent.token" defaultValue={getNested(settings, "agent.token", "")} />
-            </div>
-          </SettingsSection>
-          <SettingsSection title="IM Channel" description="用户通过哪个 IM 接收通知和发指令。">
-            <div className="grid gap-3 md:grid-cols-2">
-              {agentChannels.map(([type, label]) => (
-                <div key={type} className="grid gap-3 rounded-lg border p-3">
-                  <SwitchRow label={label} name={`agent.channels.${type}.enabled`} defaultChecked={Boolean(getNested(agentChannel(settings, type), "enabled", false))} />
-                  <LabelInput label="接收人或群" name={`agent.channels.${type}.binding`} defaultValue={getNested(agentChannel(settings, type), "binding", "")} />
-                  <SelectField name={`agent.channels.${type}.notificationLevel`} label="通知级别" defaultValue={getNested(agentChannel(settings, type), "notificationLevel", "failures")} options={[["all", "全部"], ["failures", "只失败"], ["needs-action", "只需要人工处理"]]} />
-                  <SwitchRow label="允许远程操作" name={`agent.channels.${type}.allowRemoteActions`} defaultChecked={Boolean(getNested(agentChannel(settings, type), "allowRemoteActions", false))} />
-                </div>
-              ))}
-            </div>
-          </SettingsSection>
-        </TabsContent>
-      </Tabs>
+              <LabelInput label="Agent Token / 连接密钥" name="agent.token" defaultValue={getNested(settings, "agent.token", "")} className="w-48" />
+            </SettingsSection>
+            <SettingsSection title="IM Channel" description="用户通过哪个 IM 接收通知和发指令。">
+              <div className="grid gap-3">
+                {agentChannels.map(([type, label]) => (
+                  <div key={type} className="rounded-lg border bg-card px-3 py-1">
+                    <SwitchRow label={label} name={`agent.channels.${type}.enabled`} defaultChecked={Boolean(getNested(agentChannel(settings, type), "enabled", false))} />
+                    <LabelInput label="接收人或群" name={`agent.channels.${type}.binding`} defaultValue={getNested(agentChannel(settings, type), "binding", "")} className="w-36" />
+                    <SelectField name={`agent.channels.${type}.notificationLevel`} label="通知级别" defaultValue={getNested(agentChannel(settings, type), "notificationLevel", "failures")} options={[["all", "全部"], ["failures", "只失败"], ["needs-action", "只需要人工处理"]]} />
+                    <SwitchRow label="允许远程操作" name={`agent.channels.${type}.allowRemoteActions`} defaultChecked={Boolean(getNested(agentChannel(settings, type), "allowRemoteActions", false))} />
+                  </div>
+                ))}
+              </div>
+            </SettingsSection>
+          </SettingsPane>
+        </div>
+      </div>
     </form>
   );
 
   if (view === "jobs") {
     return (
-      <div className="grid gap-4">
-        <PageHeader
-          icon={ClipboardList}
-          title={t("page.jobsTitle")}
-          description={t("page.jobsDescription")}
-          action={<div className="flex gap-2">{createTaskDialog}<Button onClick={() => refresh(true)} variant="outline"><RefreshCcw /> {t("actions.refresh")}</Button></div>}
-        />
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">{jobsTable}{jobDetail}</div>
-      </div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">{jobsTable}{jobDetail}</div>
     );
   }
 
@@ -1124,10 +1299,10 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
   }
 
   if (view === "settings") {
-    return <div className="grid gap-4"><PageHeader icon={Settings} title={t("page.settingsTitle")} description={t("page.settingsDescription")} />{settingsPanel}</div>;
+    return settingsPanel;
   }
 
-  return <div className="grid gap-4"><PageHeader icon={ClipboardList} title={t("page.jobsTitle")} description={t("page.jobsDescription")} />{jobsTable}</div>;
+  return <div className="grid gap-4">{jobsTable}</div>;
 }
 
 function cleanId(value: string) {
@@ -1166,24 +1341,223 @@ function FieldControl({ label, help, children }: { label: string; help?: React.R
   );
 }
 
-function SettingsSection({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
+// Horizontal row: help goes to ? tooltip; description shows current option behavior.
+function SettingRow({ label, help, description, children }: { label: string; help?: React.ReactNode; description?: string; children: React.ReactNode }) {
   return (
-    <div className="grid gap-3 rounded-lg border bg-card p-4">
-      <div>
+    <div className="flex min-h-10 items-center gap-6 py-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1 text-sm font-medium leading-snug">
+          {label}
+          <HelpTooltip>{help}</HelpTooltip>
+        </div>
+        {description && <div className="mt-0.5 text-xs leading-snug text-muted-foreground">{description}</div>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function SelectField({ name, label, help, defaultValue, options, optionHelp, selectClassName }: {
+  name: string;
+  label: string;
+  help?: React.ReactNode;
+  defaultValue?: string;
+  options: Array<[string, string]>;
+  optionHelp?: Record<string, string>;
+  selectClassName?: string;
+}) {
+  const [currentValue, setCurrentValue] = React.useState(defaultValue ?? "");
+  const controlId = cleanId(name);
+  return (
+    <SettingRow label={label} help={help} description={optionHelp?.[currentValue]}>
+      <NativeSelect id={controlId} name={name} defaultValue={defaultValue} className={selectClassName} onChange={(e) => setCurrentValue((e.target as HTMLSelectElement).value)}>
+        {options.map(([value, optionLabel]) => (
+          <NativeSelectOption key={value} value={value}>{optionLabel}</NativeSelectOption>
+        ))}
+      </NativeSelect>
+    </SettingRow>
+  );
+}
+
+function LabelInput({ label, help, className, ...props }: React.ComponentProps<typeof Input> & { label: string; help?: React.ReactNode }) {
+  const controlId = props.id || cleanId(String(props.name || label));
+  return (
+    <SettingRow label={label} help={help}>
+      <Input {...props} id={controlId} className={cn("w-28", className)} />
+    </SettingRow>
+  );
+}
+
+function PathField({ label, help, name, defaultValue, onChanged }: { label: string; help?: React.ReactNode; name: string; defaultValue?: string; onChanged?: () => void }) {
+  const [value, setValue] = React.useState(defaultValue ?? "");
+  async function browse() {
+    try {
+      const res = await jsonFetch<{ path: string }>("/api/pick-directory", { method: "POST" });
+      if (res.path) {
+        setValue(res.path);
+        onChanged?.();
+      }
+    } catch { /* ignore */ }
+  }
+  return (
+    <SettingRow label={label} help={help}>
+      <div className="flex items-center gap-1.5">
+        <Input name={name} value={value} onChange={(e) => setValue(e.target.value)} className="w-56" />
+        <Button type="button" variant="outline" size="sm" onClick={browse} title="选择文件夹">
+          <FolderOpen className="size-3.5" />
+        </Button>
+      </div>
+    </SettingRow>
+  );
+}
+
+function SwitchRow({ label, name, defaultChecked, help }: { label: string; name: string; defaultChecked?: boolean; help?: React.ReactNode }) {
+  const controlId = cleanId(name);
+  return (
+    <SettingRow label={label} help={help}>
+      <Switch id={controlId} name={name} defaultChecked={defaultChecked} />
+    </SettingRow>
+  );
+}
+
+function PromptField({ name, label, defaultValue }: { name: string; label: string; defaultValue?: string }) {
+  return (
+    <FieldControl label={label} help="只追加本项对应任务的额外约束；不会替代系统内置提示词。">
+      <Textarea name={name} defaultValue={defaultValue} className="min-h-24 resize-y" />
+    </FieldControl>
+  );
+}
+
+// 封面与文案：先选模板（卡片）→ 选封面图来源（固定帧 / AI 选帧）→ 选文案来源（无 / 固定 / AI）。
+function CoverCopyPane({ settings, onChanged }: { settings: SettingsShape | null; onChanged?: () => void }) {
+  const [template, setTemplate] = React.useState(getNested(settings, "task.coverAndCopy.template", "红黄爆款"));
+  const [imageMode, setImageMode] = React.useState(getNested(settings, "task.coverAndCopy.imageMode", "ai"));
+  const [copyMode, setCopyMode] = React.useState(getNested(settings, "task.coverAndCopy.copyMode", "ai"));
+  const [aiPrompt, setAiPrompt] = React.useState(getNested(settings, "task.coverAndCopy.aiPrompt", "") || coverTemplateAiPrompt(template));
+  const noTemplate = isNoTemplate(template);
+
+  function onTemplateChange(value: string) {
+    setTemplate(value);
+    setAiPrompt(coverTemplateAiPrompt(value));
+    onChanged?.();
+  }
+
+  return (
+    <div className="rounded-lg border bg-card px-4 py-1">
+      <input type="hidden" name="task.coverAndCopy.template" value={template} />
+      <div className="py-2.5">
+        <FieldLabel label="封面模板" help="决定封面的视觉风格（配色、描边、文字样式），渲染时会真实套用所选模板。" />
+        <div className="mt-2 grid grid-cols-2 gap-3">
+          {COVER_TEMPLATE_IDS.map((name) => {
+            const selected = template === name;
+            const svgPreview = isNoTemplate(name)
+              ? null
+              : buildCoverSvg(name, PREVIEW_SAMPLE, { width: 480, height: 270 });
+
+            return (
+              <button
+                type="button"
+                key={name}
+                onClick={() => onTemplateChange(name)}
+                className={cn(
+                  "group relative overflow-hidden rounded-lg border-2 text-left transition",
+                  selected ? "border-primary ring-2 ring-primary/30" : "border-transparent hover:border-border",
+                )}
+              >
+                <div className="flex aspect-video items-center justify-center overflow-hidden bg-zinc-900">
+                  {isNoTemplate(name) ? (
+                    <div
+                      className="flex h-full w-full items-center justify-center text-[10px] font-medium text-zinc-500"
+                      style={{ background: coverTemplateSampleBg(name) }}
+                    >
+                      纯画面 · 无文字
+                    </div>
+                  ) : (
+                    <div
+                      className="relative h-full w-full"
+                      style={{ background: coverTemplateSampleBg(name), backgroundSize: "cover" }}
+                      dangerouslySetInnerHTML={{ __html: svgPreview || "" }}
+                    />
+                  )}
+                </div>
+                <div className="flex items-center justify-between bg-card px-2 py-1.5 text-[11px]">
+                  <span className="font-medium">{name}</span>
+                  {selected && <CheckCircle2 className="size-3 text-primary" />}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <SettingRow label="封面图" help="选择封面画面的来源。" description={imageMode === "fixed" ? "使用视频中固定的某一帧作为封面画面。" : "固定抽取 5 帧交给 AI 选最佳画面；模型无多模态能力时从 5 帧中随机选 1 帧。"}>
+        <NativeSelect name="task.coverAndCopy.imageMode" value={imageMode} onChange={(e) => setImageMode((e.target as HTMLSelectElement).value)} className="w-36">
+          <NativeSelectOption value="fixed">固定帧</NativeSelectOption>
+          <NativeSelectOption value="ai">AI 选帧</NativeSelectOption>
+        </NativeSelect>
+      </SettingRow>
+      {imageMode === "fixed" && (
+        <LabelInput label="帧编号" help="从 0 开始计数，0 表示第一帧。" name="task.coverAndCopy.fixedFrameIndex" type="number" min={0} defaultValue={getNested(settings, "task.coverAndCopy.fixedFrameIndex", 0)} className="w-28" />
+      )}
+
+      {noTemplate ? (
+        <input type="hidden" name="task.coverAndCopy.copyMode" value="none" />
+      ) : (
+        <>
+          <SettingRow label="封面文案" help="选择封面上叠加文字的来源。" description={copyMode === "none" ? "封面不叠加任何文字，仅使用画面。" : copyMode === "fixed" ? "使用下方手动填写的固定文案。" : "由 AI 根据视频内容生成封面文案，可编辑提示词。"}>
+            <NativeSelect name="task.coverAndCopy.copyMode" value={copyMode} onChange={(e) => setCopyMode((e.target as HTMLSelectElement).value)} className="w-36">
+              <NativeSelectOption value="none">无文案</NativeSelectOption>
+              <NativeSelectOption value="fixed">固定文案</NativeSelectOption>
+              <NativeSelectOption value="ai">AI 文案</NativeSelectOption>
+            </NativeSelect>
+          </SettingRow>
+
+          {copyMode === "fixed" && (
+            <React.Fragment key={template}>
+              {coverTemplateFields(template).map((field) => (
+                <LabelInput key={field.key} label={field.label} name={`task.coverAndCopy.fixedCopy.${field.key}`} placeholder={field.placeholder} defaultValue={getNested(settings, `task.coverAndCopy.fixedCopy.${field.key}`, "")} className="w-56" />
+              ))}
+            </React.Fragment>
+          )}
+
+          {copyMode === "ai" && (
+            <FieldControl label="AI 文案提示词" help="作为封面文案生成的额外约束；每个模板有默认提示词，可自行修改。">
+              <Textarea name="task.coverAndCopy.aiPrompt" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} className="min-h-24 resize-y" />
+            </FieldControl>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SettingsSection({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
+  return (
+    <div className="grid gap-0 rounded-lg border bg-card px-4 py-1">
+      <div className="py-3">
         <h3 className="font-medium text-sm">{title}</h3>
-        <p className="mt-1 text-muted-foreground text-xs">{description}</p>
+        {description && <p className="mt-0.5 text-muted-foreground text-xs">{description}</p>}
       </div>
       {children}
     </div>
   );
 }
 
-function SettingsAccordionItem({ value, title, description, icon: Icon, compact = false, children }: {
+function SettingsPane({ active, id, children }: { active: string; id: string; children: React.ReactNode }) {
+  return (
+    <div className={cn("grid gap-4", active !== id && "hidden")}>
+      {children}
+    </div>
+  );
+}
+
+function SettingsAccordionItem({ value, title, description, icon: Icon, compact = false, autoHeight = false, children }: {
   value: string;
   title: string;
   description: string;
   icon?: React.ElementType;
   compact?: boolean;
+  autoHeight?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -1201,49 +1575,10 @@ function SettingsAccordionItem({ value, title, description, icon: Icon, compact 
           </div>
         </div>
       </AccordionTrigger>
-      <AccordionContent className={cn("grid gap-4", compact ? "pb-3" : "pb-4")}>
+      <AccordionContent className={cn("grid gap-4", compact ? "pb-3" : "pb-4", autoHeight && "h-auto")}>
         {children}
       </AccordionContent>
     </AccordionItem>
-  );
-}
-
-function LabelInput({ label, help, ...props }: React.ComponentProps<typeof Input> & { label: string; help?: React.ReactNode }) {
-  const controlId = props.id || cleanId(String(props.name || label));
-
-  return (
-    <div className="grid gap-2">
-      <FieldLabel id={controlId} label={label} help={help} />
-      <Input {...props} id={controlId} />
-    </div>
-  );
-}
-
-function SelectField({ name, label, help, defaultValue, options }: {
-  name: string;
-  label: string;
-  help?: React.ReactNode;
-  defaultValue?: string;
-  options: Array<[string, string]>;
-}) {
-  const controlId = cleanId(name);
-  return (
-    <div className="grid gap-2">
-      <FieldLabel id={controlId} label={label} help={help} />
-      <NativeSelect id={controlId} name={name} defaultValue={defaultValue}>
-        {options.map(([value, optionLabel]) => (
-          <NativeSelectOption key={value} value={value}>{optionLabel}</NativeSelectOption>
-        ))}
-      </NativeSelect>
-    </div>
-  );
-}
-
-function PromptField({ name, label, defaultValue }: { name: string; label: string; defaultValue?: string }) {
-  return (
-    <FieldControl label={label} help="只追加本项对应任务的额外约束；不会替代系统内置提示词。">
-      <Textarea name={name} defaultValue={defaultValue} className="min-h-24 resize-y" />
-    </FieldControl>
   );
 }
 
@@ -1262,16 +1597,6 @@ function DialogRow({ icon: Icon, label, children }: {
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {children}
       </div>
-    </div>
-  );
-}
-
-function SwitchRow({ label, name, defaultChecked, help }: { label: string; name: string; defaultChecked?: boolean; help?: React.ReactNode }) {
-  const controlId = cleanId(name);
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
-      <FieldLabel id={controlId} label={label} help={help} />
-      <Switch id={controlId} name={name} defaultChecked={defaultChecked} />
     </div>
   );
 }

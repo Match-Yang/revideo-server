@@ -219,7 +219,8 @@ export function getDirByName(name: string): DirInfo | undefined {
 export async function renderWithFFmpeg(
   dir: DirInfo,
   onProgress?: (progress: RenderProgress) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  outputDir?: string
 ): Promise<{ output: string; durationSec: number }> {
   const emit = (stage: string, percent: number, message: string) => {
     onProgress?.({ stage, percent, message });
@@ -248,13 +249,12 @@ export async function renderWithFFmpeg(
     }
   }
 
-  const outDir = path.join(process.cwd(), "out");
-  if (!fs.existsSync(outDir)) {
-    fs.mkdirSync(outDir, { recursive: true });
+  const resolvedOutDir = outputDir || path.join(process.cwd(), "out");
+  if (!fs.existsSync(resolvedOutDir)) {
+    fs.mkdirSync(resolvedOutDir, { recursive: true });
   }
 
-  const outputPath = `out/${dir.name}.mp4`;
-  const absOutputPath = path.resolve(process.cwd(), outputPath);
+  const absOutputPath = path.join(resolvedOutDir, `${dir.name}.mp4`);
   const subtitlePath = dir.subtitleFiles.length > 0
     ? path.join(PUBLIC_DIR, path.basename(dir.subtitleFiles[0]))
     : undefined;
@@ -310,7 +310,7 @@ export async function renderWithFFmpeg(
       "-b:a", "128k",
       "-shortest",
       "-movflags", "+faststart",
-      outputPath,
+      absOutputPath,
     );
 
     emit("rendering", 10, "开始 ffmpeg 渲染...");
@@ -357,12 +357,11 @@ export async function renderWithFFmpeg(
 
   // Extract cover
   emit("extracting-cover", 96, "提取封面...");
-  const coverPath = `out/${dir.name}-cover.jpg`;
-  const absCoverPath = path.resolve(process.cwd(), coverPath);
+  const absCoverPath = path.join(resolvedOutDir, `${dir.name}-cover.jpg`);
   if (!fs.existsSync(absCoverPath)) {
     try {
       execSync(
-        `ffmpeg -y -i "${sourceVideoPath}" -frames:v 1 -q:v 2 "${coverPath}"`,
+        `ffmpeg -y -i "${sourceVideoPath}" -frames:v 1 -q:v 2 "${absCoverPath}"`,
         { stdio: "pipe", cwd: process.cwd() }
       );
     } catch (err) {
@@ -371,5 +370,5 @@ export async function renderWithFFmpeg(
   }
 
   emit("done", 100, "ffmpeg 渲染完成");
-  return { output: outputPath, durationSec };
+  return { output: absOutputPath, durationSec };
 }

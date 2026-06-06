@@ -46,7 +46,7 @@ import {
   translateText,
 } from "./translate/openai-compatible";
 import { getSystemHealth } from "./health";
-import { calculateTargetCommentCount, loadSettings, saveSettings } from "./settings";
+import { calculateTargetCommentCount, defaultRenderDir, loadSettings, saveSettings } from "./settings";
 import {
   createTask,
   getAllTasks,
@@ -152,10 +152,16 @@ function markCompletedIfAllTargetsPublished(jobId: string): void {
   }
 }
 
+function getRenderOutputDir(job: NonNullable<ReturnType<typeof loadJob>>): string {
+  const settings = (job.settingsSnapshot || {}) as { task?: { render?: { outputDir?: string } } };
+  return settings.task?.render?.outputDir || defaultRenderDir();
+}
+
 function existingRenderResult(job: NonNullable<ReturnType<typeof loadJob>>) {
-  const outputPath = path.resolve(process.cwd(), "out", `${job.id}.mp4`);
+  const renderDir = getRenderOutputDir(job);
+  const outputPath = path.join(renderDir, `${job.id}.mp4`);
   if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) return null;
-  const coverPath = path.resolve(process.cwd(), "out", `${job.id}-cover.jpg`);
+  const coverPath = path.join(renderDir, `${job.id}-cover.jpg`);
   const normalized = job.source.metadata?.normalizedAssets as { durationSec?: number } | undefined;
   const durationSec = Math.max(0, Number(normalized?.durationSec || job.source.metadata?.durationSec || 0)) *
     Math.min(10, Math.max(1, Number(job.options.repeatTimes || 1)));
@@ -535,8 +541,22 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         message: "Cover generation started",
       });
       try {
-        const coverMode = loadSettings().task.coverAndCopy.coverMode;
-        const coverResult = await generateCover(latest, coverMode !== "none" && coverMode !== "template-fixed-copy");
+        const cc = loadSettings().task.coverAndCopy;
+        const opt = latest.options || {};
+        const imageMode = opt.coverImageMode === "fixed" || opt.coverImageMode === "ai"
+          ? opt.coverImageMode
+          : cc.imageMode;
+        const copyMode = opt.coverCopyMode === "none" || opt.coverCopyMode === "fixed" || opt.coverCopyMode === "ai"
+          ? opt.coverCopyMode
+          : cc.copyMode;
+        const coverResult = await generateCover(latest, {
+          template: opt.coverTemplate || cc.template,
+          imageMode,
+          copyMode,
+          fixedFrameIndex: cc.fixedFrameIndex,
+          fixedCopy: cc.fixedCopy,
+          aiPrompt: cc.aiPrompt,
+        });
         const next = loadJob(job.id) || latest;
         next.artifacts.coverImage = coverResult.coverLandscape;
         next.artifacts.coverImagePortrait = coverResult.coverPortrait;
@@ -813,9 +833,38 @@ const ui_dir = fs.existsSync(path.join(dashboardOutDir, "index.html"))
   : path.join(__dirname, "ui");
 app.use(express.static(ui_dir, { extensions: ["html"] }));
 
-// Serve rendered output files
+// Serve rendered output files (legacy fallback for old out/ directory)
 const outDir = path.join(process.cwd(), "out");
 app.use("/out", express.static(outDir));
+
+// Serve job output video from wherever artifacts.outputVideo lives (absolute path)
+app.get("/api/jobs/:jobId/output", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+  const filePath = job.artifacts.outputVideo;
+  if (!filePath || !fs.existsSync(filePath)) { res.status(404).json({ error: "Output file not found" }); return; }
+  // Safety: file must be inside the configured render dir or legacy out/
+  const renderDir = getRenderOutputDir(job);
+  const allowed = [renderDir, outDir];
+  if (!allowed.some((d) => filePath.startsWith(d + path.sep) || filePath.startsWith(d + "/"))) {
+    res.status(403).json({ error: "Access denied" }); return;
+  }
+  res.sendFile(filePath);
+});
+
+// Serve job cover image from wherever artifacts.coverImage lives (absolute path)
+app.get("/api/jobs/:jobId/cover", (req, res) => {
+  const job = loadJob(req.params.jobId);
+  if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+  const filePath = job.artifacts.coverImage;
+  if (!filePath || !fs.existsSync(filePath)) { res.status(404).json({ error: "Cover not found" }); return; }
+  const renderDir = getRenderOutputDir(job);
+  const allowed = [renderDir, outDir];
+  if (!allowed.some((d) => filePath.startsWith(d + path.sep) || filePath.startsWith(d + "/"))) {
+    res.status(403).json({ error: "Access denied" }); return;
+  }
+  res.sendFile(filePath);
+});
 
 // ============================================================
 // Cross-platform Job API
@@ -920,6 +969,25 @@ app.put("/api/settings", (req, res) => {
     res.json({ success: true, settings: saveSettings(req.body || {}) });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Opens a native macOS folder-picker dialog via osascript (local-only tool).
+app.post("/api/pick-directory", async (_req, res) => {
+  try {
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFileAsync = promisify(execFile);
+    // `choose folder` runs inside osascript (StandardAdditions) and needs no
+    // System Events automation permission; returns the POSIX path directly.
+    const { stdout } = await execFileAsync("osascript", [
+      "-e",
+      'POSIX path of (choose folder with prompt "选择文件夹")',
+    ]);
+    res.json({ path: stdout.trim() });
+  } catch {
+    // User cancelled the dialog or not macOS — just return empty
+    res.json({ path: "" });
   }
 });
 
@@ -1077,7 +1145,7 @@ app.post("/api/jobs/:jobId/retry", (req, res) => {
   const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(current, status, job.options.publishAction);
   const run = enqueueJobRun(job.id, {
     steps,
-    force: Boolean(req.body?.force),
+    force: true, // retry always re-renders and re-publishes
     formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
   });
   res.status(run.status === "queued" ? 202 : 200).json({ success: true, run, queue: snapshotQueue() });

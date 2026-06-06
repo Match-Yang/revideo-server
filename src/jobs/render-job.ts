@@ -3,7 +3,7 @@ import path from "path";
 import type { DirInfo } from "../types";
 import { renderWithFFmpeg, type RenderProgress } from "../renderer";
 import type { RevideoJob } from "./types";
-import type { RevideoSettings } from "../settings";
+import { defaultRenderDir, type RevideoSettings } from "../settings";
 
 export interface JobRenderResult {
   outputPath: string;
@@ -74,13 +74,16 @@ export async function renderJob(
   const useComments = job.options.renderComments !== undefined
     ? job.options.renderComments
     : settings.task?.render?.renderComments !== false;
+  const outputDir = settings.task?.render?.outputDir || defaultRenderDir();
   const result = await renderWithFFmpeg(
     useComments ? dirInfo : { ...dirInfo, commentFile: undefined },
     onProgress,
     signal,
+    outputDir,
   );
-  const outputPath = path.resolve(process.cwd(), result.output);
-  const coverPath = path.resolve(process.cwd(), "out", `${job.id}-cover.jpg`);
+  // result.output is now an absolute path (set by renderWithFFmpeg)
+  const outputPath = result.output;
+  const coverPath = path.join(outputDir, `${job.id}-cover.jpg`);
 
   return {
     outputPath,

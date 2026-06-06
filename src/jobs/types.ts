@@ -89,9 +89,9 @@ export interface JobOptions {
     description?: string;
     tags?: string;
   };
-  coverMode?: "none" | "ai-frame-ai-copy" | "template-fixed-copy" | "template-ai-copy" | string;
   coverTemplate?: string;
-  fixedCoverCopy?: string;
+  coverImageMode?: "fixed" | "ai" | string;
+  coverCopyMode?: "none" | "fixed" | "ai" | string;
 }
 
 export interface JobArtifacts {

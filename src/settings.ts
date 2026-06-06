@@ -20,8 +20,10 @@ export interface RevideoSettings {
       loginMode: "platform-session" | "no-login";
       sourceLanguage: "auto" | string;
     };
+    storage: {
+      taskDataDir: string;
+    };
     download: {
-      cacheDir: string;
       videoQuality: "auto" | "best" | "1080p" | "720p" | "480p";
       qualityFallback: "down" | "up" | "exact";
       audioMode: "follow-video" | "best-audio" | "none";
@@ -58,20 +60,12 @@ export interface RevideoSettings {
       };
     };
     coverAndCopy: {
-      coverMode: "none" | "ai-frame-ai-copy" | "template-fixed-copy" | "template-ai-copy";
       template: string;
-      fixedCoverCopy: string;
-      aiCoverPrompt: string;
-      framePreference: "auto" | "people" | "product" | "action" | "information";
-      frameSampleCount: number;
-      titleMode: "template" | "ai" | "source";
-      descriptionMode: "template" | "ai" | "source";
-      tagsMode: "template" | "ai" | "manual";
-      titleMaxLength: number;
-      descriptionTemplate: string;
-      tagsTemplate: string;
-      blockedWords: string;
-      replacementWords: string;
+      imageMode: "fixed" | "ai";
+      fixedFrameIndex: number;
+      copyMode: "none" | "fixed" | "ai";
+      fixedCopy: { line1: string; line2: string; line3: string };
+      aiPrompt: string;
     };
     render: {
       outputDir: string;
@@ -99,27 +93,60 @@ export interface RevideoSettings {
       };
       platformConfigs: {
         bilibili: {
+          defaultAction: PublishAction;
+          retryCount: number;
           category: string;
           declaration: string;
           tags: string;
-          descriptionTemplate: string;
+          prompts: { title: string; description: string; tags: string };
         };
         douyin: {
+          defaultAction: PublishAction;
+          retryCount: number;
           declarationType: string;
           visibility: string;
           topics: string;
-          descriptionTemplate: string;
+          prompts: { title: string; description: string; tags: string };
         };
         xiaohongshu: {
+          defaultAction: PublishAction;
+          retryCount: number;
           topics: string;
           visibility: string;
-          bodyTemplate: string;
+          prompts: { title: string; description: string; tags: string };
         };
         youtube: {
+          defaultAction: PublishAction;
+          retryCount: number;
           category: string;
           tags: string;
-          descriptionTemplate: string;
           visibility: string;
+          prompts: { title: string; description: string; tags: string };
+        };
+        tiktok: {
+          defaultAction: PublishAction;
+          retryCount: number;
+          privacy: string;
+          allowComment: boolean;
+          allowDuet: boolean;
+          allowStitch: boolean;
+          isAigc: boolean;
+          prompts: { title: string; description: string; tags: string };
+        };
+        instagram: {
+          defaultAction: PublishAction;
+          retryCount: number;
+          visibility: string;
+          hashtags: string;
+          prompts: { title: string; description: string; tags: string };
+        };
+        x: {
+          defaultAction: PublishAction;
+          retryCount: number;
+          replySettings: string;
+          isSensitive: boolean;
+          hashtags: string;
+          prompts: { title: string; description: string; tags: string };
         };
       };
     };
@@ -162,8 +189,8 @@ function userVideosDir(): string {
   return fs.existsSync(videos) ? videos : movies;
 }
 
-export function defaultDownloadDir(): string {
-  return path.join(userVideosDir(), "Revideo", "Download");
+export function defaultTaskDataDir(): string {
+  return path.join(userVideosDir(), "Revideo", "Cache");
 }
 
 export function defaultRenderDir(): string {
@@ -179,8 +206,10 @@ export const defaultSettings: RevideoSettings = {
       loginMode: "platform-session",
       sourceLanguage: "auto",
     },
+    storage: {
+      taskDataDir: defaultTaskDataDir(),
+    },
     download: {
-      cacheDir: defaultDownloadDir(),
       videoQuality: "auto",
       qualityFallback: "down",
       audioMode: "follow-video",
@@ -217,20 +246,12 @@ export const defaultSettings: RevideoSettings = {
       },
     },
     coverAndCopy: {
-      coverMode: "template-ai-copy",
-      template: "汽车测评",
-      fixedCoverCopy: "海外网友热议",
-      aiCoverPrompt: "封面文案要短、有信息量，不要夸张标题党。",
-      framePreference: "auto",
-      frameSampleCount: 5,
-      titleMode: "ai",
-      descriptionMode: "ai",
-      tagsMode: "ai",
-      titleMaxLength: 80,
-      descriptionTemplate: "来源视频经翻译、整理与重新制作后发布。",
-      tagsTemplate: "汽车,海外视频",
-      blockedWords: "",
-      replacementWords: "",
+      template: "红黄爆款",
+      imageMode: "ai",
+      fixedFrameIndex: 0,
+      copyMode: "ai",
+      fixedCopy: { line1: "", line2: "", line3: "" },
+      aiPrompt: "",
     },
     render: {
       outputDir: defaultRenderDir(),
@@ -258,27 +279,60 @@ export const defaultSettings: RevideoSettings = {
       },
       platformConfigs: {
         bilibili: {
+          defaultAction: "publish",
+          retryCount: 1,
           category: "汽车",
-          declaration: "转载",
+          declaration: "内容为转载",
           tags: "汽车,海外视频",
-          descriptionTemplate: "来源视频经翻译、审核与重新制作后发布。",
+          prompts: { title: "", description: "", tags: "" },
         },
         douyin: {
+          defaultAction: "publish",
+          retryCount: 1,
           declarationType: "转载",
           visibility: "公开",
           topics: "汽车 海外视频",
-          descriptionTemplate: "海外内容搬运，已做翻译与风险过滤。",
+          prompts: { title: "", description: "", tags: "" },
         },
         xiaohongshu: {
+          defaultAction: "publish",
+          retryCount: 1,
           topics: "汽车 海外视频",
           visibility: "公开",
-          bodyTemplate: "海外内容搬运，已做翻译与整理。",
+          prompts: { title: "", description: "", tags: "" },
         },
         youtube: {
+          defaultAction: "publish",
+          retryCount: 1,
           category: "Autos & Vehicles",
           tags: "cars,china,ev",
-          descriptionTemplate: "Translated and edited from the source video.",
           visibility: "private",
+          prompts: { title: "", description: "", tags: "" },
+        },
+        tiktok: {
+          defaultAction: "publish",
+          retryCount: 1,
+          privacy: "SELF_ONLY",
+          allowComment: true,
+          allowDuet: false,
+          allowStitch: false,
+          isAigc: false,
+          prompts: { title: "", description: "", tags: "" },
+        },
+        instagram: {
+          defaultAction: "draft",
+          retryCount: 1,
+          visibility: "private",
+          hashtags: "",
+          prompts: { title: "", description: "", tags: "" },
+        },
+        x: {
+          defaultAction: "draft",
+          retryCount: 1,
+          replySettings: "everyone",
+          isSensitive: false,
+          hashtags: "",
+          prompts: { title: "", description: "", tags: "" },
         },
       },
     },

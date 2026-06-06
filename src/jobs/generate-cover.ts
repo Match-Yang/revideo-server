@@ -3,6 +3,7 @@ import path from "path";
 import { execSync } from "child_process";
 import sharp from "sharp";
 import { getTranslateConfig } from "../translate/openai-compatible";
+import { buildCoverSvg, isNoTemplate } from "../../dashboard/src/lib/cover-templates";
 import type { RevideoJob } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,36 @@ function extractVideoFrames(
   return frames;
 }
 
+// Extract a single frame by its zero-based frame index (0 = first frame).
+function extractFixedFrame(
+  videoPath: string,
+  outputDir: string,
+  index: number,
+): string {
+  fs.mkdirSync(outputDir, { recursive: true });
+  const outPath = path.join(outputDir, "frame_fixed.jpg");
+  const idx = Math.max(0, Math.floor(index || 0));
+  try {
+    execSync(
+      `ffmpeg -y -i "${videoPath}" -vf "select=eq(n\\,${idx})" -frames:v 1 -fps_mode passthrough -q:v 2 "${outPath}"`,
+      { stdio: "pipe" },
+    );
+  } catch (err) {
+    console.warn(
+      `[Cover] Failed to extract fixed frame ${idx}, falling back to first frame: ${err}`,
+    );
+  }
+  if (!fs.existsSync(outPath)) {
+    execSync(`ffmpeg -y -i "${videoPath}" -frames:v 1 -q:v 2 "${outPath}"`, {
+      stdio: "pipe",
+    });
+  }
+  if (!fs.existsSync(outPath)) {
+    throw new Error("Failed to extract fixed frame for cover generation");
+  }
+  return outPath;
+}
+
 // ---------------------------------------------------------------------------
 // 2. Select best cover + generate text via vision LLM
 // ---------------------------------------------------------------------------
@@ -92,23 +123,106 @@ const COVER_VISION_PROMPT = [
   "请严格按以上JSON格式返回，不要输出任何其他内容。index 是选中截图的编号（1到5）。",
 ].join("\n");
 
+// Text-only variant (no images): used when the cover frame is fixed but copy is AI-generated.
+const COVER_TEXT_PROMPT = [
+  "你是一个专业的短视频封面文案专家，擅长以视频标题为主、视频描述为辅，提炼出让人忍不住点击的封面文案。",
+  "我会给你视频的标题和描述。请根据它们的实际内容，生成三句封面文案，要求：",
+  "   - 文案必须紧扣视频的实际主题，让人一看就知道视频讲什么",
+  "   - 整体要有吸引力、悬念感或信息量，激发点击欲望",
+  "   - 第一句：不超过4个字，是点睛的语气/情绪词（如：海外评论、海外网友等等）",
+  "   - 第二句：3到8个字，概括视频核心信息的前半段",
+  "   - 第三句：不超过10个字，补全核心信息的后半段",
+  "   - 第二句+第三句连读要通顺、有完整含义",
+  "",
+  "请严格按以下JSON格式返回，不要输出任何其他内容（index 固定填 1）：",
+  '{"index":1,"text1":"快看","text2":"美国能买的中国车","text3":"老外直呼这配置真香！"}',
+].join("\n");
+
 function encodeImageToBase64(imagePath: string): string {
   return fs.readFileSync(imagePath).toString("base64");
 }
 
-async function selectCoverWithVision(
-  frames: string[],
-  title: string,
-  description: string,
-): Promise<CoverSelection> {
+// Shared chat-completion call against the OpenAI-compatible endpoint.
+async function callCoverCompletion(messages: unknown[]): Promise<string> {
   const config = getTranslateConfig();
   const apiKey = process.env[config.apiKeyEnv];
   if (!apiKey) {
     throw new Error(`Missing API key env: ${config.apiKeyEnv}`);
   }
+  const timeoutMs = Math.max(
+    1000,
+    Number(process.env.TRANSLATE_TIMEOUT_MS || 120000),
+  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let resp: Response;
+  try {
+    resp = await fetch(`${config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        temperature: 0.3,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Cover request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!resp.ok) {
+    throw new Error(`Cover request failed: ${resp.status} ${await resp.text()}`);
+  }
+  const data = (await resp.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) {
+    throw new Error("Cover response did not include content");
+  }
+  return text;
+}
 
+function parseCoverSelection(text: string, frameCount: number): CoverSelection {
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error(`Cover response is not valid JSON: ${text}`);
+  }
+  const selection = JSON.parse(jsonMatch[0]) as CoverSelection;
+  if (
+    typeof selection.text1 !== "string" ||
+    typeof selection.text2 !== "string" ||
+    typeof selection.text3 !== "string"
+  ) {
+    throw new Error(`Invalid cover selection: ${JSON.stringify(selection)}`);
+  }
+  if (
+    typeof selection.index !== "number" ||
+    selection.index < 1 ||
+    selection.index > frameCount
+  ) {
+    selection.index = 1;
+  }
+  return selection;
+}
+
+// Vision call: selects the best frame among `frames` and generates copy.
+// Throws if the model lacks multimodal capability or the request fails.
+async function selectCoverWithVision(
+  frames: string[],
+  title: string,
+  description: string,
+  aiPrompt: string,
+): Promise<CoverSelection> {
   const userText = `视频标题：${title}\n视频描述：${description}`;
-
   const content: unknown[] = [
     { type: "text", text: userText },
     ...frames.map((f) => ({
@@ -116,80 +230,35 @@ async function selectCoverWithVision(
       image_url: { url: `data:image/jpeg;base64,${encodeImageToBase64(f)}` },
     })),
   ];
+  const system = aiPrompt
+    ? `${COVER_VISION_PROMPT}\n\n补充文案要求：${aiPrompt}`
+    : COVER_VISION_PROMPT;
+  const text = await callCoverCompletion([
+    { role: "system", content: system },
+    { role: "user", content },
+  ]);
+  return parseCoverSelection(text, frames.length);
+}
 
-  const timeoutMs = Math.max(
-    1000,
-    Number(process.env.TRANSLATE_TIMEOUT_MS || 120000),
-  );
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  let resp: Response;
-  try {
-    resp = await fetch(
-      `${config.baseUrl.replace(/\/$/, "")}/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: config.model,
-          messages: [
-            { role: "system", content: COVER_VISION_PROMPT },
-            { role: "user", content },
-          ],
-          temperature: 0.3,
-        }),
-        signal: controller.signal,
-      },
-    );
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error(`Cover vision request timed out after ${timeoutMs}ms`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (!resp.ok) {
-    throw new Error(
-      `Cover vision request failed: ${resp.status} ${await resp.text()}`,
-    );
-  }
-
-  const data = (await resp.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) {
-    throw new Error("Cover vision response did not include content");
-  }
-
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`Cover vision response is not valid JSON: ${text}`);
-  }
-
-  const selection = JSON.parse(jsonMatch[0]) as CoverSelection;
-  if (
-    typeof selection.index !== "number" ||
-    selection.index < 1 ||
-    selection.index > frames.length ||
-    typeof selection.text1 !== "string" ||
-    typeof selection.text2 !== "string" ||
-    typeof selection.text3 !== "string"
-  ) {
-    throw new Error(`Invalid cover selection: ${JSON.stringify(selection)}`);
-  }
-
-  return selection;
+// Text-only call: generates copy from title/description (no frame selection).
+async function generateCoverTextOnly(
+  title: string,
+  description: string,
+  aiPrompt: string,
+): Promise<CoverSelection> {
+  const userText = `视频标题：${title}\n视频描述：${description}`;
+  const system = aiPrompt
+    ? `${COVER_TEXT_PROMPT}\n\n补充文案要求：${aiPrompt}`
+    : COVER_TEXT_PROMPT;
+  const text = await callCoverCompletion([
+    { role: "system", content: system },
+    { role: "user", content: userText },
+  ]);
+  return parseCoverSelection(text, 1);
 }
 
 // ---------------------------------------------------------------------------
-// 3. Compose cover image with text overlay
+// 3. Compose cover image with template overlay (shared SVG engine)
 // ---------------------------------------------------------------------------
 
 const LANDSCAPE_W = 1440;
@@ -197,101 +266,31 @@ const LANDSCAPE_H = 1080;
 const PORTRAIT_W = 1080;
 const PORTRAIT_H = 1920;
 
-const TEXT_STYLES: { color: string; stroke: string; strokeWidth: number }[] = [
-  { color: "#FF2D2D", stroke: "#000000", strokeWidth: 10 }, // text1: red + black stroke
-  { color: "#FF8C00", stroke: "#FFFFFF", strokeWidth: 12 }, // text2: orange + white border
-  { color: "#FFD700", stroke: "#000000", strokeWidth: 6 }, // text3: gold + black stroke
-];
-const FONT_STACK =
-  "Heiti SC, PingFang SC, Noto Sans CJK SC, Microsoft YaHei, sans-serif";
-
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function landscapeTextSvg(texts: string[]): Buffer {
-  const fontSizes = [240, 130, 100];
-  const lineGap = 20;
-  const x = LANDSCAPE_W * 0.06;
-  const totalHeight = fontSizes[0] + fontSizes[1] + fontSizes[2] + lineGap * 2;
-  const startY = (LANDSCAPE_H - totalHeight) / 2;
-  const yPositions = [
-    startY + fontSizes[0] / 2,
-    startY + fontSizes[0] + lineGap + fontSizes[1] / 2,
-    startY + fontSizes[0] + lineGap + fontSizes[1] + lineGap + fontSizes[2] / 2,
-  ];
-
-  const els = texts
-    .map((t, i) => {
-      const s = TEXT_STYLES[i];
-      return `<text x="${x}" y="${yPositions[i]}" dominant-baseline="central" font-size="${fontSizes[i]}" font-weight="900" fill="${s.color}" font-family="${FONT_STACK}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" paint-order="stroke" stroke-linejoin="round">${escapeXml(t)}</text>`;
-    })
-    .join("");
-
-  return Buffer.from(
-    `<svg width="${LANDSCAPE_W}" height="${LANDSCAPE_H}" xmlns="http://www.w3.org/2000/svg">${els}</svg>`,
-  );
-}
-
-function portraitTextSvg(texts: string[]): Buffer {
-  const fontSizes = [187, 100, 80];
-  const lineGap = 20;
-  const totalHeight = fontSizes[0] + fontSizes[1] + fontSizes[2] + lineGap * 2;
-  const startY = (PORTRAIT_H - totalHeight) / 2;
-  const xPositions = [PORTRAIT_W * 0.18, PORTRAIT_W * 0.48, PORTRAIT_W * 0.75];
-  const yPositions = [
-    startY + fontSizes[0] / 2,
-    startY + fontSizes[0] + lineGap + fontSizes[1] / 2,
-    startY + fontSizes[0] + lineGap + fontSizes[1] + lineGap + fontSizes[2] / 2,
-  ];
-
-  const els = texts
-    .map((t, i) => {
-      const s = TEXT_STYLES[i];
-      return `<text x="${xPositions[i]}" y="${yPositions[i]}" dominant-baseline="hanging" font-size="${fontSizes[i]}" font-weight="900" fill="${s.color}" font-family="${FONT_STACK}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" paint-order="stroke" stroke-linejoin="round" writing-mode="tb">${escapeXml(t)}</text>`;
-    })
-    .join("");
-
-  return Buffer.from(
-    `<svg width="${PORTRAIT_W}" height="${PORTRAIT_H}" xmlns="http://www.w3.org/2000/svg">${els}</svg>`,
-  );
-}
-
+// Composites the shared template SVG (darkening / blocks / chips / text — all
+// produced by dashboard/src/lib/cover-templates.ts) over the resized frame so
+// the rendered cover is identical to the dashboard preview.
 async function composeCover(
   framePath: string,
   texts: string[],
   orientation: "landscape" | "portrait",
+  template: string,
 ): Promise<Buffer> {
   const w = orientation === "landscape" ? LANDSCAPE_W : PORTRAIT_W;
   const h = orientation === "landscape" ? LANDSCAPE_H : PORTRAIT_H;
 
-  const baseImage = sharp(framePath)
-    .resize(w, h, { fit: "cover", position: "center" });
+  const baseImage = sharp(framePath).resize(w, h, {
+    fit: "cover",
+    position: "center",
+  });
 
-  // No text = plain screenshot, skip overlay and text composition
-  if (texts.length === 0) {
+  // No text (or "无模板") = plain screenshot, no overlay.
+  if (texts.length === 0 || isNoTemplate(template)) {
     return baseImage.jpeg({ quality: 92 }).toBuffer();
   }
 
-  const darkened = baseImage.modulate({ brightness: 0.55 });
-
-  const overlaySvg = `<svg width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="rgba(0,0,0,0.35)"/></svg>`;
-  const overlayBuf = Buffer.from(overlaySvg);
-
-  const textBuf =
-    orientation === "landscape"
-      ? landscapeTextSvg(texts)
-      : portraitTextSvg(texts);
-
-  return darkened
-    .composite([
-      { input: overlayBuf, blend: "over" },
-      { input: textBuf, blend: "over" },
-    ])
+  const svg = buildCoverSvg(template, texts, { orientation, width: w, height: h });
+  return baseImage
+    .composite([{ input: Buffer.from(svg), blend: "over" }])
     .jpeg({ quality: 92 })
     .toBuffer();
 }
@@ -300,7 +299,21 @@ async function composeCover(
 // 4. Orchestrate
 // ---------------------------------------------------------------------------
 
-export async function generateCover(job: RevideoJob, smartCover = true): Promise<CoverResult> {
+export interface CoverOptions {
+  template: string;
+  imageMode: "fixed" | "ai";
+  fixedFrameIndex: number;
+  copyMode: "none" | "fixed" | "ai";
+  fixedCopy: { line1?: string; line2?: string; line3?: string };
+  aiPrompt: string;
+}
+
+const AI_FRAME_COUNT = 5;
+
+export async function generateCover(
+  job: RevideoJob,
+  options: CoverOptions,
+): Promise<CoverResult> {
   const normalized = job.source.metadata?.normalizedAssets as
     | { mediaPath?: string }
     | undefined;
@@ -317,20 +330,81 @@ export async function generateCover(job: RevideoJob, smartCover = true): Promise
   const description =
     (typeof raw?.description === "string" ? raw.description : "") || title;
 
+  // "无模板" = plain screenshot, never overlay text.
+  const noTemplate = isNoTemplate(options.template);
+  const copyMode = noTemplate ? "none" : options.copyMode;
+  const wantAiText = copyMode === "ai";
   const framesDir = path.join(job.artifacts.derivedDir, "cover-frames");
-  const frames = extractVideoFrames(mediaPath, framesDir, 5);
-  if (frames.length < 2) {
-    throw new Error("Failed to extract enough frames for cover generation");
+
+  let selectedFrame: string;
+  let reportedIndex = 1;
+  let aiTexts: [string, string, string] | null = null;
+
+  if (options.imageMode === "fixed") {
+    selectedFrame = extractFixedFrame(
+      mediaPath,
+      framesDir,
+      options.fixedFrameIndex,
+    );
+    console.log(`[Cover] Using fixed frame #${options.fixedFrameIndex}`);
+  } else {
+    const frames = extractVideoFrames(mediaPath, framesDir, AI_FRAME_COUNT);
+    if (frames.length < 1) {
+      throw new Error("Failed to extract frames for cover generation");
+    }
+    try {
+      const selection = await selectCoverWithVision(
+        frames,
+        title,
+        description,
+        options.aiPrompt,
+      );
+      reportedIndex = selection.index;
+      selectedFrame = frames[Math.min(selection.index - 1, frames.length - 1)];
+      if (wantAiText) {
+        aiTexts = [selection.text1, selection.text2, selection.text3];
+      }
+      console.log(`[Cover] Vision selected frame ${selection.index}`);
+    } catch (err) {
+      // Model lacks multimodal capability (or request failed): random frame.
+      reportedIndex = Math.floor(Math.random() * frames.length) + 1;
+      selectedFrame = frames[reportedIndex - 1];
+      console.warn(
+        `[Cover] Vision unavailable, falling back to random frame ${reportedIndex}: ${err}`,
+      );
+    }
   }
-  console.log(`[Cover] Extracted ${frames.length} frames, smartCover=${smartCover}`);
 
-  const selection = await selectCoverWithVision(frames, title, description);
+  // Fixed frame + AI copy: vision wasn't used to produce text, generate it now.
+  if (wantAiText && !aiTexts) {
+    try {
+      const sel = await generateCoverTextOnly(title, description, options.aiPrompt);
+      aiTexts = [sel.text1, sel.text2, sel.text3];
+    } catch (err) {
+      console.warn(`[Cover] AI copy generation failed: ${err}`);
+      aiTexts = null;
+    }
+  }
+
+  // Resolve overlay text by copy mode.
+  let texts: string[] = [];
+  if (copyMode === "fixed") {
+    texts = [
+      options.fixedCopy.line1,
+      options.fixedCopy.line2,
+      options.fixedCopy.line3,
+    ]
+      .map((s) => (s || "").trim())
+      .filter(Boolean);
+  } else if (copyMode === "ai") {
+    texts = (aiTexts || [])
+      .map((s) => (s || "").trim())
+      .filter(Boolean);
+  }
+
   console.log(
-    `[Cover] Selected frame ${selection.index}${smartCover ? `: "${selection.text1}" / "${selection.text2}" / "${selection.text3}"` : ""}`,
+    `[Cover] template=${options.template} copyMode=${copyMode} lines=${texts.length}`,
   );
-
-  const selectedFrame = frames[selection.index - 1];
-  const texts = smartCover ? [selection.text1, selection.text2, selection.text3] : [];
 
   const outDir = path.join(process.cwd(), "out");
   fs.mkdirSync(outDir, { recursive: true });
@@ -339,8 +413,8 @@ export async function generateCover(job: RevideoJob, smartCover = true): Promise
   const portraitPath = path.join(outDir, `${job.id}-cover-portrait.jpg`);
 
   const [landscapeBuf, portraitBuf] = await Promise.all([
-    composeCover(selectedFrame, texts, "landscape"),
-    composeCover(selectedFrame, texts, "portrait"),
+    composeCover(selectedFrame, texts, "landscape", options.template),
+    composeCover(selectedFrame, texts, "portrait", options.template),
   ]);
 
   fs.writeFileSync(landscapePath, landscapeBuf);
@@ -352,6 +426,11 @@ export async function generateCover(job: RevideoJob, smartCover = true): Promise
   return {
     coverLandscape: landscapePath,
     coverPortrait: portraitPath,
-    selection,
+    selection: {
+      index: reportedIndex,
+      text1: texts[0] || "",
+      text2: texts[1] || "",
+      text3: texts[2] || "",
+    },
   };
 }
