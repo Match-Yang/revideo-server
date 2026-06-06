@@ -6,7 +6,6 @@ import {
   Activity,
   CheckCircle2,
   ChevronDown,
-  ClipboardList,
   Cpu,
   Download,
   ExternalLink,
@@ -25,7 +24,6 @@ import {
   RotateCcw,
   Search,
   Send,
-  Settings,
   SlidersHorizontal,
   Trash2,
   XCircle,
@@ -39,7 +37,9 @@ import {
   coverTemplateAiPrompt,
   coverTemplateFields,
   coverTemplateSampleBg,
+  coverTemplateSampleText,
   isNoTemplate,
+  normalizeCoverTemplateId,
 } from "@/lib/cover-templates";
 
 import {
@@ -50,7 +50,7 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -71,7 +71,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -193,9 +192,6 @@ const languages = [
   "ru",
 ];
 
-// Sample copy used to render the template preview cards (so each card shows the
-// exact SVG the backend will produce for these three lines).
-const PREVIEW_SAMPLE = ["硬核实测", "国产新能源", "续航破千公里"];
 const styleConstraintOptions = ["自然口语", "保守直译", "短视频口吻", "新闻解说", "专业测评", "夸张吸睛", "幽默吐槽", "克制高级", "本土化表达", "保留原文语气", "适合 B 站", "适合抖音", "适合小红书", "适合 YouTube"];
 const agentChannels = [
   ["wechat", "微信"],
@@ -289,10 +285,6 @@ function stepCounter(job: RevideoJob) {
   return { current, total, step: cursor.step };
 }
 
-function formatTime(value: number | undefined, locale: string) {
-  return value ? new Date(value).toLocaleString(locale === "zh" ? "zh-CN" : "en-US") : "-";
-}
-
 function outputHref(jobId: string, type: "output" | "cover" = "output") {
   return `/api/jobs/${jobId}/${type}`;
 }
@@ -326,6 +318,10 @@ function listValue(value: JsonValue | undefined, fallback: string[]) {
 function formString(data: FormData, key: string, fallback = "") {
   const value = data.get(key);
   return typeof value === "string" ? value : fallback;
+}
+
+function svgDataUri(svg: string) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 function setPath(target: Record<string, unknown>, path: string, value: unknown) {
@@ -400,7 +396,7 @@ function PageHeader({ icon: Icon, title, description, action }: {
 }
 
 export function RevideoConsole({ view }: { view: DashboardView }) {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const [jobs, setJobs] = React.useState<RevideoJob[]>([]);
   const [queue, setQueue] = React.useState<QueueShape>({ active: null, queued: [], scheduled: [], recent: [] });
   const [settings, setSettings] = React.useState<SettingsShape | null>(null);
@@ -470,6 +466,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
   }, [jobs, query, queue, statusFilter]);
 
   // Client-side pagination over the filtered list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset pagination when filters/page size change.
   React.useEffect(() => setPage(1), [query, statusFilter, pageSize]);
   const pageCount = Math.max(1, Math.ceil(filteredJobs.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -594,11 +591,11 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     saveTimerRef.current = setTimeout(() => persistSettings(form), delay);
   }
 
-  // Trigger auto-save when user changes the platform toggle buttons
+  // Trigger auto-save when user changes the platform toggle buttons.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scheduleSave intentionally reads latest refs.
   React.useEffect(() => {
     if (settingsTargetsVersion === 0) return;
     if (formRef.current) scheduleSave(formRef.current, 300);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsTargetsVersion]);
 
   const platformChooser = (value: string[], onChange: React.Dispatch<React.SetStateAction<string[]>>, isSettings = false) => (
@@ -1346,11 +1343,11 @@ function SettingRow({ label, help, description, children }: { label: string; hel
   return (
     <div className="flex min-h-10 items-center gap-6 py-2.5">
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1 text-sm font-medium leading-snug">
+        <div className="flex items-center gap-1 font-medium text-sm leading-snug">
           {label}
           <HelpTooltip>{help}</HelpTooltip>
         </div>
-        {description && <div className="mt-0.5 text-xs leading-snug text-muted-foreground">{description}</div>}
+        {description && <div className="mt-0.5 text-muted-foreground text-xs leading-snug">{description}</div>}
       </div>
       <div className="shrink-0">{children}</div>
     </div>
@@ -1430,7 +1427,7 @@ function PromptField({ name, label, defaultValue }: { name: string; label: strin
 
 // 封面与文案：先选模板（卡片）→ 选封面图来源（固定帧 / AI 选帧）→ 选文案来源（无 / 固定 / AI）。
 function CoverCopyPane({ settings, onChanged }: { settings: SettingsShape | null; onChanged?: () => void }) {
-  const [template, setTemplate] = React.useState(getNested(settings, "task.coverAndCopy.template", "红黄爆款"));
+  const [template, setTemplate] = React.useState(normalizeCoverTemplateId(getNested(settings, "task.coverAndCopy.template", DEFAULT_COVER_TEMPLATE)));
   const [imageMode, setImageMode] = React.useState(getNested(settings, "task.coverAndCopy.imageMode", "ai"));
   const [copyMode, setCopyMode] = React.useState(getNested(settings, "task.coverAndCopy.copyMode", "ai"));
   const [aiPrompt, setAiPrompt] = React.useState(getNested(settings, "task.coverAndCopy.aiPrompt", "") || coverTemplateAiPrompt(template));
@@ -1452,7 +1449,7 @@ function CoverCopyPane({ settings, onChanged }: { settings: SettingsShape | null
             const selected = template === name;
             const svgPreview = isNoTemplate(name)
               ? null
-              : buildCoverSvg(name, PREVIEW_SAMPLE, { width: 480, height: 270 });
+              : buildCoverSvg(name, coverTemplateSampleText(name), { width: 480, height: 270 });
 
             return (
               <button
@@ -1467,16 +1464,18 @@ function CoverCopyPane({ settings, onChanged }: { settings: SettingsShape | null
                 <div className="flex aspect-video items-center justify-center overflow-hidden bg-zinc-900">
                   {isNoTemplate(name) ? (
                     <div
-                      className="flex h-full w-full items-center justify-center text-[10px] font-medium text-zinc-500"
+                      className="flex h-full w-full items-center justify-center font-medium text-[10px] text-zinc-500"
                       style={{ background: coverTemplateSampleBg(name) }}
                     >
                       纯画面 · 无文字
                     </div>
                   ) : (
-                    <div
-                      className="relative h-full w-full"
+                    // biome-ignore lint/performance/noImgElement: preview uses an in-memory SVG data URI, not a remote asset.
+                    <img
+                      alt={`${name} 封面模板预览`}
+                      className="h-full w-full object-cover"
+                      src={svgDataUri(svgPreview || "")}
                       style={{ background: coverTemplateSampleBg(name), backgroundSize: "cover" }}
-                      dangerouslySetInnerHTML={{ __html: svgPreview || "" }}
                     />
                   )}
                 </div>
@@ -1513,11 +1512,16 @@ function CoverCopyPane({ settings, onChanged }: { settings: SettingsShape | null
           </SettingRow>
 
           {copyMode === "fixed" && (
-            <React.Fragment key={template}>
+            <div className="grid gap-3 rounded-lg bg-muted/30 p-3 md:grid-cols-2" key={template}>
+              <div className="md:col-span-2">
+                <p className="text-muted-foreground text-xs">
+                  当前模板需要 {coverTemplateFields(template).length} 行固定文案，输入框顺序对应预览里的文字层级和位置。
+                </p>
+              </div>
               {coverTemplateFields(template).map((field) => (
-                <LabelInput key={field.key} label={field.label} name={`task.coverAndCopy.fixedCopy.${field.key}`} placeholder={field.placeholder} defaultValue={getNested(settings, `task.coverAndCopy.fixedCopy.${field.key}`, "")} className="w-56" />
+                <LabelInput key={field.key} label={field.label} name={`task.coverAndCopy.fixedCopy.${field.key}`} placeholder={field.placeholder} defaultValue={getNested(settings, `task.coverAndCopy.fixedCopy.${field.key}`, "")} className="w-full" />
               ))}
-            </React.Fragment>
+            </div>
           )}
 
           {copyMode === "ai" && (

@@ -3,7 +3,7 @@ import path from "path";
 import { execSync } from "child_process";
 import sharp from "sharp";
 import { getTranslateConfig } from "../translate/openai-compatible";
-import { buildCoverSvg, isNoTemplate } from "../../dashboard/src/lib/cover-templates";
+import { buildCoverSvg, coverTemplateFields, isNoTemplate } from "../../dashboard/src/lib/cover-templates";
 import type { RevideoJob } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -15,6 +15,7 @@ interface CoverSelection {
   text1: string; // ≤3 chars, emotion word
   text2: string; // 3-7 chars
   text3: string; // ≤10 chars
+  text4?: string; // optional extra label for 4-line templates
 }
 
 export interface CoverResult {
@@ -107,18 +108,19 @@ const COVER_VISION_PROMPT = [
   "",
   "请完成两个任务：",
   "1. 从5张截图中选出最适合做封面的一张（与标题和描述最契合、画面丰富、视觉冲击力强）",
-  "2. 根据视频标题和描述的实际内容，生成三句封面文案，要求：",
+  "2. 根据视频标题和描述的实际内容，生成最多四句封面文案，要求：",
   "   - 文案必须紧扣视频的实际主题，让人一看就知道视频讲什么",
   "   - 整体要有吸引力、悬念感或信息量，激发点击欲望",
   "   - 第一句：不超过4个字，是点睛的语气/情绪词（如：海外评论、海外网友等等）",
   "   - 第二句：3到8个字，概括视频核心信息的前半段",
   "   - 第三句：不超过10个字，补全核心信息的后半段",
+  "   - 第四句：可选，不超过6个字，只在模板需要更多标签时填写；否则返回空字符串",
   "   - 第二句+第三句连读要通顺、有完整含义",
   "",
   "示例（标题：2026年加拿大能购买的10款最豪华SUV）：",
-  '{"index":3,"text1":"2026","text2":"加拿大能买到的","text3":"10款最豪华中国SUV"}',
+  '{"index":3,"text1":"2026","text2":"加拿大能买到的","text3":"10款最豪华中国SUV","text4":""}',
   "示例（标题：美国能买到的首批中国车！老外直呼：这配置比本土车还香？）：",
-  '{"index":2,"text1":"快看","text2":"美国能买的中国车","text3":"老外直呼这配置真香！"}',
+  '{"index":2,"text1":"快看","text2":"美国能买的中国车","text3":"老外直呼这配置真香！","text4":""}',
   "",
   "请严格按以上JSON格式返回，不要输出任何其他内容。index 是选中截图的编号（1到5）。",
 ].join("\n");
@@ -126,16 +128,17 @@ const COVER_VISION_PROMPT = [
 // Text-only variant (no images): used when the cover frame is fixed but copy is AI-generated.
 const COVER_TEXT_PROMPT = [
   "你是一个专业的短视频封面文案专家，擅长以视频标题为主、视频描述为辅，提炼出让人忍不住点击的封面文案。",
-  "我会给你视频的标题和描述。请根据它们的实际内容，生成三句封面文案，要求：",
+  "我会给你视频的标题和描述。请根据它们的实际内容，生成最多四句封面文案，要求：",
   "   - 文案必须紧扣视频的实际主题，让人一看就知道视频讲什么",
   "   - 整体要有吸引力、悬念感或信息量，激发点击欲望",
   "   - 第一句：不超过4个字，是点睛的语气/情绪词（如：海外评论、海外网友等等）",
   "   - 第二句：3到8个字，概括视频核心信息的前半段",
   "   - 第三句：不超过10个字，补全核心信息的后半段",
+  "   - 第四句：可选，不超过6个字，只在模板需要更多标签时填写；否则返回空字符串",
   "   - 第二句+第三句连读要通顺、有完整含义",
   "",
   "请严格按以下JSON格式返回，不要输出任何其他内容（index 固定填 1）：",
-  '{"index":1,"text1":"快看","text2":"美国能买的中国车","text3":"老外直呼这配置真香！"}',
+  '{"index":1,"text1":"快看","text2":"美国能买的中国车","text3":"老外直呼这配置真香！","text4":""}',
 ].join("\n");
 
 function encodeImageToBase64(imagePath: string): string {
@@ -304,7 +307,7 @@ export interface CoverOptions {
   imageMode: "fixed" | "ai";
   fixedFrameIndex: number;
   copyMode: "none" | "fixed" | "ai";
-  fixedCopy: { line1?: string; line2?: string; line3?: string };
+  fixedCopy: Record<string, string | undefined>;
   aiPrompt: string;
 }
 
@@ -338,7 +341,7 @@ export async function generateCover(
 
   let selectedFrame: string;
   let reportedIndex = 1;
-  let aiTexts: [string, string, string] | null = null;
+  let aiTexts: string[] | null = null;
 
   if (options.imageMode === "fixed") {
     selectedFrame = extractFixedFrame(
@@ -362,7 +365,7 @@ export async function generateCover(
       reportedIndex = selection.index;
       selectedFrame = frames[Math.min(selection.index - 1, frames.length - 1)];
       if (wantAiText) {
-        aiTexts = [selection.text1, selection.text2, selection.text3];
+        aiTexts = [selection.text1, selection.text2, selection.text3, selection.text4 || ""];
       }
       console.log(`[Cover] Vision selected frame ${selection.index}`);
     } catch (err) {
@@ -379,7 +382,7 @@ export async function generateCover(
   if (wantAiText && !aiTexts) {
     try {
       const sel = await generateCoverTextOnly(title, description, options.aiPrompt);
-      aiTexts = [sel.text1, sel.text2, sel.text3];
+      aiTexts = [sel.text1, sel.text2, sel.text3, sel.text4 || ""];
     } catch (err) {
       console.warn(`[Cover] AI copy generation failed: ${err}`);
       aiTexts = null;
@@ -389,11 +392,8 @@ export async function generateCover(
   // Resolve overlay text by copy mode.
   let texts: string[] = [];
   if (copyMode === "fixed") {
-    texts = [
-      options.fixedCopy.line1,
-      options.fixedCopy.line2,
-      options.fixedCopy.line3,
-    ]
+    texts = coverTemplateFields(options.template)
+      .map((field) => options.fixedCopy[field.key])
       .map((s) => (s || "").trim())
       .filter(Boolean);
   } else if (copyMode === "ai") {
@@ -431,6 +431,7 @@ export async function generateCover(
       text1: texts[0] || "",
       text2: texts[1] || "",
       text3: texts[2] || "",
+      text4: texts[3] || "",
     },
   };
 }

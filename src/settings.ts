@@ -64,7 +64,7 @@ export interface RevideoSettings {
       imageMode: "fixed" | "ai";
       fixedFrameIndex: number;
       copyMode: "none" | "fixed" | "ai";
-      fixedCopy: { line1: string; line2: string; line3: string };
+      fixedCopy: { line1: string; line2: string; line3: string; line4: string; line5: string };
       aiPrompt: string;
     };
     render: {
@@ -246,11 +246,11 @@ export const defaultSettings: RevideoSettings = {
       },
     },
     coverAndCopy: {
-      template: "红黄爆款",
+      template: "粗黑橙字",
       imageMode: "ai",
       fixedFrameIndex: 0,
       copyMode: "ai",
-      fixedCopy: { line1: "", line2: "", line3: "" },
+      fixedCopy: { line1: "", line2: "", line3: "", line4: "", line5: "" },
       aiPrompt: "",
     },
     render: {
