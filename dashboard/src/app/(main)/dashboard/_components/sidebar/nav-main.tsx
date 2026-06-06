@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { ChevronRight, MailIcon, PlusCircleIcon } from "lucide-react";
+import { ChevronRight, PlusCircleIcon } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
@@ -181,17 +180,6 @@ export function NavMain({ items }: NavMainProps) {
                   <span>{t("sidebar.newSource")}</span>
                 </Link>
               </SidebarMenuButton>
-              <Button
-                asChild
-                size="icon"
-                className="h-9 w-9 shrink-0 group-data-[collapsible=icon]:opacity-0"
-                variant="outline"
-              >
-                <Link prefetch={false} href="/dashboard/queue">
-                  <MailIcon />
-                  <span className="sr-only">{t("sidebar.queueShortcut")}</span>
-                </Link>
-              </Button>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroupContent>

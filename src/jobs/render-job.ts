@@ -41,7 +41,7 @@ export function buildJobDirInfo(job: RevideoJob): DirInfo {
   }
 
   const settings = (job.settingsSnapshot || {}) as Partial<RevideoSettings>;
-  const bilingual = settings.production?.bilingualSubtitles ?? false;
+  const bilingual = job.options.bilingualSubtitles ?? settings.task?.translation?.bilingualSubtitles ?? false;
 
   return {
     name: job.id,
@@ -73,7 +73,7 @@ export async function renderJob(
   const settings = (job.settingsSnapshot || {}) as Partial<RevideoSettings>;
   const useComments = job.options.renderComments !== undefined
     ? job.options.renderComments
-    : settings.production?.renderComments !== false;
+    : settings.task?.render?.renderComments !== false;
   const result = await renderWithFFmpeg(
     useComments ? dirInfo : { ...dirInfo, commentFile: undefined },
     onProgress,

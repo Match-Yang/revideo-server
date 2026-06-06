@@ -16,7 +16,7 @@ export default function Page() {
           <p className="mt-2 text-muted-foreground text-sm">{t("openWorkflowDashboard")}</p>
         </div>
         <Button asChild>
-          <Link href="/dashboard/default">{t("enterDashboard")}</Link>
+          <Link href="/dashboard/jobs">{t("enterDashboard")}</Link>
         </Button>
       </div>
     </main>

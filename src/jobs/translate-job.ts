@@ -463,7 +463,7 @@ export async function translateSubtitles(job: RevideoJob, targetLanguage: string
 
   const settings = (job.settingsSnapshot || {}) as Partial<RevideoSettings>;
   const userPrompt =
-    (settings.production?.subtitlePrompt as string) || "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。";
+    settings.task?.translation?.prompts?.subtitle || "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。";
   const context = sourceContext(job, job.source.metadata?.title);
   const targetDir = path.join(job.artifacts.sourceDir, "subtitles");
 
@@ -514,7 +514,7 @@ export async function translateSubtitles(job: RevideoJob, targetLanguage: string
 
 export async function translateJobAssets(job: RevideoJob): Promise<JobTranslationResult> {
   const targetLanguage = job.options.targetLanguage || "zh-CN";
-  const renderComments = job.options.renderComments ?? loadSettings().production.renderComments;
+  const renderComments = job.options.renderComments ?? loadSettings().task.render.renderComments;
   const comments = renderComments === false
     ? { status: "skipped" as const, inputCount: 0, droppedCount: 0 }
     : await translateComments(job, targetLanguage);

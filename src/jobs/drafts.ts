@@ -62,7 +62,7 @@ async function generateBilibiliDraft(
   const targetLanguage = job.options.targetLanguage || "zh-CN";
   const settings = loadSettings();
   const settingsCategory =
-    settings.publishing?.platformConfigs?.bilibili?.category;
+    settings.task.publish.platformConfigs.bilibili.category;
 
   if (!/^zh/i.test(targetLanguage)) {
     return {

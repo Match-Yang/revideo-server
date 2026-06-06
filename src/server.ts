@@ -178,28 +178,32 @@ function snapshotQueue() {
   };
 }
 
-function defaultRunSteps(): string[] {
-  const steps = ["download", "normalize", "translate", "generate-cover", "render", "generate-drafts", "preflight-publish"];
-  return loadSettings().publishing.scheduleMode === "immediate" ? [...steps, "publish"] : steps;
+function shouldPublishForAction(action?: string): boolean {
+  return (action || loadSettings().task.publish.defaultAction) === "publish";
 }
 
-function withConfiguredPublishStep(steps: string[]): string[] {
-  return loadSettings().publishing.scheduleMode === "immediate" && !steps.includes("publish")
+function defaultRunSteps(publishAction?: string): string[] {
+  const steps = ["download", "normalize", "translate", "generate-cover", "render", "generate-drafts", "preflight-publish"];
+  return shouldPublishForAction(publishAction) ? [...steps, "publish"] : steps;
+}
+
+function withConfiguredPublishStep(steps: string[], publishAction?: string): string[] {
+  return shouldPublishForAction(publishAction) && !steps.includes("publish")
     ? [...steps, "publish"]
     : steps;
 }
 
-function runStepsFromJobStep(step: JobStep, status?: string): string[] {
+function runStepsFromJobStep(step: JobStep, status?: string, publishAction?: string): string[] {
   const stepCompleted = status === "completed" || status === "skipped";
-  if (step === "downloading-source") return defaultRunSteps();
-  if (step === "normalizing-assets") return withConfiguredPublishStep(stepCompleted ? ["translate", "generate-cover", "render", "generate-drafts", "preflight-publish"] : ["normalize", "translate", "generate-cover", "render", "generate-drafts", "preflight-publish"]);
-  if (step === "translating-assets" || step === "moderating-assets") return withConfiguredPublishStep(stepCompleted ? ["generate-cover", "render", "generate-drafts", "preflight-publish"] : ["translate", "generate-cover", "render", "generate-drafts", "preflight-publish"]);
-  if (step === "generating-cover-image") return withConfiguredPublishStep(stepCompleted ? ["render", "generate-drafts", "preflight-publish"] : ["generate-cover", "render", "generate-drafts", "preflight-publish"]);
-  if (step === "rendering-video") return withConfiguredPublishStep(stepCompleted ? ["generate-drafts", "preflight-publish"] : ["render", "generate-drafts", "preflight-publish"]);
-  if (step === "generating-platform-drafts") return withConfiguredPublishStep(stepCompleted ? ["preflight-publish"] : ["generate-drafts", "preflight-publish"]);
-  if (step === "preflighting-targets") return stepCompleted ? withConfiguredPublishStep([]) : withConfiguredPublishStep(["preflight-publish"]);
+  if (step === "downloading-source") return defaultRunSteps(publishAction);
+  if (step === "normalizing-assets") return withConfiguredPublishStep(stepCompleted ? ["translate", "generate-cover", "render", "generate-drafts", "preflight-publish"] : ["normalize", "translate", "generate-cover", "render", "generate-drafts", "preflight-publish"], publishAction);
+  if (step === "translating-assets" || step === "moderating-assets") return withConfiguredPublishStep(stepCompleted ? ["generate-cover", "render", "generate-drafts", "preflight-publish"] : ["translate", "generate-cover", "render", "generate-drafts", "preflight-publish"], publishAction);
+  if (step === "generating-cover-image") return withConfiguredPublishStep(stepCompleted ? ["render", "generate-drafts", "preflight-publish"] : ["generate-cover", "render", "generate-drafts", "preflight-publish"], publishAction);
+  if (step === "rendering-video") return withConfiguredPublishStep(stepCompleted ? ["generate-drafts", "preflight-publish"] : ["render", "generate-drafts", "preflight-publish"], publishAction);
+  if (step === "generating-platform-drafts") return withConfiguredPublishStep(stepCompleted ? ["preflight-publish"] : ["generate-drafts", "preflight-publish"], publishAction);
+  if (step === "preflighting-targets") return stepCompleted ? withConfiguredPublishStep([], publishAction) : withConfiguredPublishStep(["preflight-publish"], publishAction);
   if (step === "publishing-targets") return ["publish"];
-  return defaultRunSteps();
+  return defaultRunSteps(publishAction);
 }
 
 function clearScheduledPublish(jobId: string): void {
@@ -210,7 +214,7 @@ function clearScheduledPublish(jobId: string): void {
 }
 
 function getScheduledPublishDelayMs(): number {
-  const minutes = Number(loadSettings().publishing.scheduledDelayMinutes || 0);
+  const minutes = 0;
   return Math.max(0, minutes) * 60 * 1000;
 }
 
@@ -311,7 +315,7 @@ function recoverInterruptedJobRuns(): void {
     if (nonTerminalSteps.includes(step) && step !== "completed" && step !== "cancelled" && step !== "failed") {
       const stepStatus = job.workflow.steps[step]?.status;
       if (stepStatus !== "running" && stepStatus !== "paused") {
-        const steps = runStepsFromJobStep(step, stepStatus);
+        const steps = runStepsFromJobStep(step, stepStatus, job.options.publishAction);
         enqueueJobRun(job.id, { steps });
         appendJobEvent({
           jobId: job.id,
@@ -428,10 +432,10 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
   // Sync renderComments from current settings if not explicitly set on job
   const currentSettings = loadSettings();
   if (job.options.renderComments === undefined) {
-    job.options.renderComments = currentSettings.production.renderComments !== false;
+    job.options.renderComments = currentSettings.task.render.renderComments !== false;
   }
 
-  const steps = options.steps.length ? options.steps : defaultRunSteps();
+  const steps = options.steps.length ? options.steps : defaultRunSteps(job.options.publishAction);
   const results: Record<string, unknown> = {};
 
   try {
@@ -531,7 +535,8 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         message: "Cover generation started",
       });
       try {
-        const coverResult = await generateCover(latest, loadSettings().publishing.smartCover !== false);
+        const coverMode = loadSettings().task.coverAndCopy.coverMode;
+        const coverResult = await generateCover(latest, coverMode !== "none" && coverMode !== "template-fixed-copy");
         const next = loadJob(job.id) || latest;
         next.artifacts.coverImage = coverResult.coverLandscape;
         next.artifacts.coverImagePortrait = coverResult.coverPortrait;
@@ -656,9 +661,6 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         message: "Publish preflight completed",
         data: { results: preflightResults },
       });
-      if (!steps.includes("publish") && loadSettings().publishing.scheduleMode === "scheduled") {
-        schedulePublishRun(job.id);
-      }
     }
 
     assertRunNotCancelled(options);
@@ -787,7 +789,7 @@ function enqueueJobRun(
   const run: QueuedJobRun = {
     id: `${jobId}_${Date.now()}`,
     jobId,
-    steps: options.steps?.length ? options.steps : defaultRunSteps(),
+    steps: options.steps?.length ? options.steps : defaultRunSteps(loadJob(jobId)?.options.publishAction),
     force: options.force,
     formatId: options.formatId,
     status: "queued",
@@ -845,14 +847,14 @@ async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
   }
   cancelJobRunsForJob(jobId, "Existing run cancelled before recreating job");
   const repeatTimes = Math.min(10, Math.max(1, Number(body.options?.repeatTimes || 1)));
-  const renderComments = settings.production.renderComments !== false;
+  const renderComments = body.options?.renderComments ?? settings.task.render.renderComments !== false;
   const targetCommentCount = renderComments
     ? calculateTargetCommentCount(probe.durationSec, repeatTimes, settings)
     : 0;
   const targets: NonNullable<CreateJobRequest["targets"]> =
     body.targets?.length
       ? body.targets
-      : settings.publishing.defaultPlatforms.map((platform) => ({ platform }));
+      : settings.task.publish.defaultPlatforms.map((platform) => ({ platform }));
   const job = createJob(body, probe.platform, probe.contentId);
   job.source = {
     ...job.source,
@@ -879,8 +881,9 @@ async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
   });
   job.options = {
     ...job.options,
-    targetLanguage: body.options?.targetLanguage || settings.production.subtitleTargetLanguage,
-    downloadQuality: body.options?.downloadQuality || job.options.downloadQuality || "auto",
+    targetLanguage: body.options?.targetLanguage || settings.task.translation.targetLanguage,
+    downloadQuality: body.options?.downloadQuality || job.options.downloadQuality || settings.task.download.videoQuality || "auto",
+    publishAction: body.options?.publishAction || settings.task.publish.defaultAction,
     ...body.options,
     repeatTimes,
     targetCommentCount,
@@ -976,7 +979,7 @@ app.post("/api/jobs", async (req, res) => {
     const body = req.body as CreateJobRequest & { force?: boolean };
     const force = req.query.force === "true" || body.force === true;
     const result = await createJobFromRequest(body, force);
-    const run = enqueueJobRun(result.job.id);
+    const run = enqueueJobRun(result.job.id, { steps: defaultRunSteps(result.job.options.publishAction) });
     res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
   } catch (err) {
     const status =
@@ -996,7 +999,7 @@ app.post("/api/workflows/youtube", async (req, res) => {
       requirement: req.body?.requirement,
     };
     const result = await createJobFromRequest(body, force);
-    const run = enqueueJobRun(result.job.id);
+    const run = enqueueJobRun(result.job.id, { steps: defaultRunSteps(result.job.options.publishAction) });
     res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
   } catch (err) {
     const status = err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
@@ -1071,7 +1074,7 @@ app.post("/api/jobs/:jobId/retry", (req, res) => {
 
   const current = job.workflow.currentStep;
   const status = job.workflow.steps[current]?.status;
-  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(current, status);
+  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(current, status, job.options.publishAction);
   const run = enqueueJobRun(job.id, {
     steps,
     force: Boolean(req.body?.force),
@@ -1097,7 +1100,7 @@ app.post("/api/jobs/:jobId/resume", (req, res) => {
     return;
   }
   const status = job.workflow.steps[job.workflow.currentStep]?.status;
-  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(job.workflow.currentStep, status);
+  const steps = Array.isArray(req.body?.steps) ? req.body.steps.map(String) : runStepsFromJobStep(job.workflow.currentStep, status, job.options.publishAction);
   const run = enqueueJobRun(job.id, {
     steps,
     force: Boolean(req.body?.force),
@@ -1331,7 +1334,7 @@ app.post("/api/jobs/:jobId/run", async (req, res) => {
 
     const steps: string[] = Array.isArray(req.body?.steps)
       ? req.body.steps
-      : defaultRunSteps();
+      : defaultRunSteps(job.options.publishAction);
     const results = await executeJobRun(job.id, {
       steps,
       force: Boolean(req.body?.force),

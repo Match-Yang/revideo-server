@@ -1,11 +1,8 @@
 import {
   Activity,
-  Bot,
   ClipboardList,
   GalleryVerticalEnd,
-  GitBranch,
   HeartPulse,
-  LayoutDashboard,
   Rocket,
   Settings,
   type LucideIcon,
@@ -46,22 +43,10 @@ export const sidebarItems: NavGroup[] = [
     labelKey: "sidebar.operations",
     items: [
       {
-        title: "Overview",
-        titleKey: "sidebar.overview",
-        url: "/dashboard/default",
-        icon: LayoutDashboard,
-      },
-      {
         title: "Jobs",
         titleKey: "sidebar.jobs",
         url: "/dashboard/jobs",
         icon: ClipboardList,
-      },
-      {
-        title: "Queue",
-        titleKey: "sidebar.queue",
-        url: "/dashboard/queue",
-        icon: GitBranch,
       },
       {
         title: "Publishing",
@@ -81,12 +66,6 @@ export const sidebarItems: NavGroup[] = [
         titleKey: "sidebar.health",
         url: "/dashboard/health",
         icon: HeartPulse,
-      },
-      {
-        title: "Browser",
-        titleKey: "sidebar.browser",
-        url: "/dashboard/browser",
-        icon: Bot,
       },
       {
         title: "Settings",

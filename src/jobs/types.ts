@@ -77,7 +77,21 @@ export interface JobOptions {
   repeatTimes?: number;
   targetCommentCount?: number;
   renderComments?: boolean;
+  bilingualSubtitles?: boolean;
   translateProvider?: string;
+  outputAspect?: "auto" | "portrait" | "landscape" | "source" | string;
+  outputResolution?: "auto" | "1080x1920" | "720x1280" | "1920x1080" | string;
+  publishAction?: "draft" | "publish";
+  promptOverrides?: {
+    subtitle?: string;
+    comment?: string;
+    title?: string;
+    description?: string;
+    tags?: string;
+  };
+  coverMode?: "none" | "ai-frame-ai-copy" | "template-fixed-copy" | "template-ai-copy" | string;
+  coverTemplate?: string;
+  fixedCoverCopy?: string;
 }
 
 export interface JobArtifacts {
