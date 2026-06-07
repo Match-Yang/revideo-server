@@ -3,12 +3,23 @@ import fs from "fs";
 import path from "path";
 import { resolveCommand } from "../../dependencies";
 import type {
+  DownloadConfig,
   DownloadRequest,
   SourceAdapter,
   SourceAssetManifest,
   SourceFormat,
   SourceProbeResult,
 } from "../types";
+
+const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
+  videoQuality: "auto",
+  retryCount: 2,
+  timeoutSec: 600,
+};
+
+function resolveDownloadConfig(request: DownloadRequest): DownloadConfig {
+  return { ...DEFAULT_DOWNLOAD_CONFIG, ...(request.download || {}) };
+}
 
 const YOUTUBE_ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\/))([^&?\s/]+)/;
 const CHINESE_SUBTITLE_FALLBACKS = ["zh-Hans", "zh-Hant", "zh.*"];
@@ -185,6 +196,25 @@ function pickRecommended(formats: SourceFormat[]): SourceProbeResult["recommende
   };
 }
 
+function qualityFormatSelector(height: string): string {
+  return `bv*[height<=${height}]+ba/b[height<=${height}]/best`;
+}
+
+function qualityHeight(value: string | undefined): number | undefined {
+  if (!value || value === "auto" || value === "best") return undefined;
+  const named: Record<string, number> = {
+    "8k": 4320,
+    "4k": 2160,
+    "2k": 1440,
+  };
+  const height = named[value.toLowerCase()] ?? Number(value.match(/^(\d+)p$/i)?.[1]);
+  return Number.isFinite(height) && height > 0 ? height : undefined;
+}
+
+function defaultFormatSelector(): string[] {
+  return ["-f", "bv*[height<=720]+ba/b[height<=720]/best", "-S", "res:720"];
+}
+
 export const youtubeSourceAdapter: SourceAdapter = {
   platform: "youtube",
   implemented: true,
@@ -223,6 +253,7 @@ export const youtubeSourceAdapter: SourceAdapter = {
   },
 
   async download(request: DownloadRequest): Promise<SourceAssetManifest> {
+    const config = resolveDownloadConfig(request);
     const outputTemplate = path.join(request.outputDir, "media", "%(id)s.%(ext)s");
     const renderComments = request.options.renderComments !== false;
     const commentLimit = Math.max(1, request.options.targetCommentCount || 200);
@@ -236,19 +267,51 @@ export const youtubeSourceAdapter: SourceAdapter = {
 
     if (renderComments) {
       args.push("--write-comments");
-      args.push("--extractor-args", `youtube:max_comments=${commentLimit},${commentLimit},0,0;comment_sort=top`);
+      args.push(
+        "--extractor-args",
+        `youtube:max_comments=${commentLimit},${commentLimit},0,0;comment_sort=top`
+      );
     }
+
+    const quality =
+      request.options.downloadQuality && request.options.downloadQuality !== "auto"
+        ? request.options.downloadQuality
+        : config.videoQuality !== "auto" && config.videoQuality !== "best"
+          ? config.videoQuality
+          : undefined;
 
     if (request.formatId) {
       args.push("-f", request.formatId);
-    } else if (request.options.downloadQuality && request.options.downloadQuality !== "auto") {
-      args.push("-S", `res:${request.options.downloadQuality.replace("p", "")}`);
+    } else if (quality) {
+      const height = qualityHeight(quality);
+      if (!height) {
+        args.push(...defaultFormatSelector());
+      } else {
+        args.push("-f", qualityFormatSelector(String(height)));
+        args.push("-S", `res:${height}`);
+      }
     } else {
-      args.push("-f", "bv*[height<=720]+ba/b[height<=720]/best", "-S", "res:720");
+      args.push(...defaultFormatSelector());
     }
 
     args.push(request.url);
-    await execFileText(resolveCommand("yt-dlp"), args, 3 * 60 * 60 * 1000, request.signal);
+    const timeoutMs = Math.max(1, config.timeoutSec) * 1000;
+    const maxAttempts = Math.max(1, config.retryCount + 1);
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await execFileText(resolveCommand("yt-dlp"), args, timeoutMs, request.signal);
+        lastError = undefined;
+        break;
+      } catch (err) {
+        lastError = err;
+        if (request.signal?.aborted || attempt >= maxAttempts) break;
+        console.warn(
+          `[youtube] download attempt ${attempt}/${maxAttempts} failed, retrying: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+    if (lastError) throw lastError;
     await tryDownloadSubtitles(request);
 
     const files = walkFiles(request.outputDir);

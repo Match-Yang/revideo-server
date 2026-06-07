@@ -396,16 +396,20 @@ or
 export function batchSafetyReviewTranslationPrompt(
   kind: "comment" | "subtitle",
   targetLanguage: string,
-  context?: string
+  context?: string,
+  extraInstructions?: string
 ): string {
   const targetInstruction = targetLanguageInstruction(targetLanguage);
+  const preferences = extraInstructions?.trim()
+    ? `\n\nUser translation preferences (follow these whenever they do not conflict with the safety policy):\n${extraInstructions.trim()}`
+    : "";
   return `You are a strict safety reviewer and translator for a video reposting pipeline.
 
 Task:
 Review a JSON array of ${kind}s for publication safety. Translate only non-Chinese safe items into ${targetInstruction}. For safe Chinese items, return the exact original text unchanged.
 
 Source context:
-${context?.trim() || "No source context provided."}
+${context?.trim() || "No source context provided."}${preferences}
 
 If the source context is political, geopolitical, military, ideological, or otherwise platform-sensitive, treat ambiguous comments as referring to that context and drop them.
 
@@ -785,7 +789,8 @@ export async function translateBatchWithSafetyReview(
   inputs: SafetyReviewInput[],
   targetLanguage: string,
   kind: "comment" | "subtitle",
-  context?: string
+  context?: string,
+  extraInstructions?: string
 ): Promise<SafetyReviewOutput[]> {
   if (inputs.length === 0) return [];
 
@@ -803,7 +808,7 @@ export async function translateBatchWithSafetyReview(
       const raw = await translateText({
         text: JSON.stringify(inputs) + retryInstruction,
         targetLanguage,
-        systemPrompt: batchSafetyReviewTranslationPrompt(kind, targetLanguage, context),
+        systemPrompt: batchSafetyReviewTranslationPrompt(kind, targetLanguage, context, extraInstructions),
       });
 
       return parseSafetyReviewBatch(raw, inputs, targetLanguage);
@@ -818,7 +823,7 @@ export async function translateBatchWithSafetyReview(
   if (inputs.length === 1) return dropBatch(inputs, reason);
 
   const [left, right] = splitBatch(inputs);
-  const leftResults = await translateBatchWithSafetyReview(left, targetLanguage, kind, context);
-  const rightResults = await translateBatchWithSafetyReview(right, targetLanguage, kind, context);
+  const leftResults = await translateBatchWithSafetyReview(left, targetLanguage, kind, context, extraInstructions);
+  const rightResults = await translateBatchWithSafetyReview(right, targetLanguage, kind, context, extraInstructions);
   return [...leftResults, ...rightResults];
 }

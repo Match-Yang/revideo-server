@@ -108,6 +108,19 @@ function expectsChinese(targetLanguage: string): boolean {
   return /^(zh|cmn|yue)|chinese|中文/i.test(targetLanguage);
 }
 
+function normalizedLanguage(value: string | undefined): string {
+  return String(value || "").toLowerCase().replace("_", "-").trim();
+}
+
+function sameLanguage(source: string | undefined, target: string | undefined): boolean {
+  const src = normalizedLanguage(source);
+  const dst = normalizedLanguage(target);
+  if (!src || !dst || src === "auto") return false;
+  if (src === dst) return true;
+  if (/^(zh|cmn|yue)/.test(src) && /^(zh|cmn|yue)/.test(dst)) return true;
+  return src.split("-")[0] === dst.split("-")[0];
+}
+
 function isNonSemanticText(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return true;
@@ -117,7 +130,13 @@ function isNonSemanticText(text: string): boolean {
   return /^[\p{Emoji_Presentation}\p{Extended_Pictographic}\p{Number}\p{Punctuation}\p{Symbol}\p{Separator}\s]+$/u.test(normalized);
 }
 
-function translatedCommentText(original: string, translation: string): string {
+type CommentContentMode = RevideoSettings["task"]["render"]["commentContent"];
+
+function translatedCommentText(
+  original: string,
+  translation: string,
+  mode: CommentContentMode = "original-translated"
+): string {
   const cleanOriginal = original.trim();
   let cleanTranslation = translation.trim();
   if (hasChinese(cleanOriginal)) return cleanOriginal;
@@ -129,7 +148,34 @@ function translatedCommentText(original: string, translation: string): string {
   if (lines.length > 1 && lines[0] === cleanOriginal) {
     cleanTranslation = lines.slice(1).join("\n").trim();
   }
-  return cleanTranslation ? `${cleanOriginal}\n${cleanTranslation}` : cleanOriginal;
+  if (!cleanTranslation) return cleanOriginal;
+  if (mode === "translated-only") return cleanTranslation;
+  return `${cleanOriginal}\n${cleanTranslation}`;
+}
+
+function getJobConfig(job: RevideoJob): RevideoSettings {
+  const snapshot = job.settingsSnapshot as RevideoSettings | undefined;
+  if (snapshot?.task?.translation && snapshot?.task?.render) return snapshot;
+  return loadSettings();
+}
+
+function buildTranslationInstructions(
+  translation: RevideoSettings["task"]["translation"],
+  userPrompt?: string
+): string {
+  const parts: string[] = [];
+  if (userPrompt?.trim()) parts.push(userPrompt.trim());
+  if (translation.styleConstraints?.length) {
+    parts.push(`风格要求：${translation.styleConstraints.join("、")}`);
+  }
+  const sensitiveNote: Record<RevideoSettings["task"]["translation"]["sensitiveContent"], string> = {
+    preserve: "对可发布的敏感措辞尽量保留原意翻译。",
+    soften: "对可发布但语气强烈的内容进行温和化、去攻击性处理。",
+    mark: "对可发布但偏敏感的内容保持中性表述。",
+    delete: "对可发布但偏敏感的内容可精简删减。",
+  };
+  if (sensitiveNote[translation.sensitiveContent]) parts.push(sensitiveNote[translation.sensitiveContent]);
+  return parts.join("\n\n");
 }
 
 function sourceContext(job: RevideoJob, title?: unknown): string {
@@ -155,6 +201,10 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
     comments?: CommentLike[];
     [key: string]: unknown;
   };
+  const config = getJobConfig(job);
+  const translationSettings = config.task.translation;
+  const commentContentMode = config.task.render.commentContent;
+  const extraInstructions = buildTranslationInstructions(translationSettings, translationSettings.prompts?.comment);
   const context = sourceContext(job, data.title || job.source.metadata?.title);
   const comments = data.comments || [];
   for (const comment of comments) {
@@ -190,7 +240,7 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
   const batches = chunk(inputs, batchSize);
   const concurrency = Math.min(10, Math.max(1, Number(process.env.TRANSLATE_COMMENT_CONCURRENCY || 10)));
   const batchResults = await mapConcurrent(batches, concurrency, (batch) =>
-    translateBatchWithSafetyReview(batch, targetLanguage, "comment", context)
+    translateBatchWithSafetyReview(batch, targetLanguage, "comment", context, extraInstructions)
   );
 
   for (const results of batchResults) {
@@ -214,7 +264,7 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
         droppedCount++;
       } else {
         const originalText = String(comment.text || "");
-        const translatedText = translatedCommentText(originalText, result.translation || "");
+        const translatedText = translatedCommentText(originalText, result.translation || "", commentContentMode);
         if (expectsChinese(targetLanguage) && !hasChinese(originalText) && !hasChinese(translatedText)) {
           if (isNonSemanticText(originalText)) {
             comment.text = originalText.trim();
@@ -461,9 +511,10 @@ export async function translateSubtitles(job: RevideoJob, targetLanguage: string
     return { status: "skipped" as const, inputCount: 0, translatedCount: 0, failedCount: 0, outputPaths: [] };
   }
 
-  const settings = (job.settingsSnapshot || {}) as Partial<RevideoSettings>;
-  const userPrompt =
-    settings.task?.translation?.prompts?.subtitle || "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。";
+  const translationSettings = getJobConfig(job).task.translation;
+  const basePrompt =
+    translationSettings.prompts?.subtitle || "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。";
+  const userPrompt = buildTranslationInstructions(translationSettings, basePrompt);
   const context = sourceContext(job, job.source.metadata?.title);
   const targetDir = path.join(job.artifacts.sourceDir, "subtitles");
 
@@ -514,11 +565,21 @@ export async function translateSubtitles(job: RevideoJob, targetLanguage: string
 
 export async function translateJobAssets(job: RevideoJob): Promise<JobTranslationResult> {
   const targetLanguage = job.options.targetLanguage || "zh-CN";
-  const renderComments = job.options.renderComments ?? loadSettings().task.render.renderComments;
-  const comments = renderComments === false
-    ? { status: "skipped" as const, inputCount: 0, droppedCount: 0 }
-    : await translateComments(job, targetLanguage);
-  const subtitles = await translateSubtitles(job, targetLanguage);
+  const config = getJobConfig(job);
+  const translationSettings = config.task.translation;
+  const renderComments = job.options.renderComments ?? config.task.render.renderComments;
+  const sourceMatchesTarget = sameLanguage(job.source.language, targetLanguage);
+  const comments =
+    renderComments === false ||
+    translationSettings.commentMode === "off" ||
+    (translationSettings.commentMode === "auto" && sourceMatchesTarget)
+      ? { status: "skipped" as const, inputCount: 0, droppedCount: 0 }
+      : await translateComments(job, targetLanguage);
+  const subtitles =
+    translationSettings.subtitleMode === "off" ||
+    (translationSettings.subtitleMode === "auto" && sourceMatchesTarget)
+      ? { status: "skipped" as const, inputCount: 0, translatedCount: 0, failedCount: 0, outputPaths: [] }
+      : await translateSubtitles(job, targetLanguage);
 
   return {
     comments,

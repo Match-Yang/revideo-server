@@ -1,8 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 
-import { Clapperboard } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -41,7 +41,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton asChild>
               <Link prefetch={false} href="/dashboard/jobs">
-                <Clapperboard />
+                <Image src="/revideo-logo.png" alt="Revideo" width={20} height={20} className="shrink-0" />
                 <span className="font-semibold text-base">{APP_CONFIG.name}</span>
               </Link>
             </SidebarMenuButton>

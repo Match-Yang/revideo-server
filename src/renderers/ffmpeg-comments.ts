@@ -4,21 +4,144 @@ import { spawn } from "child_process";
 import sharp from "sharp";
 import type { Comment } from "../types";
 
-const WIDTH = 1080;
-const HEIGHT = 1920;
-const VIDEO_HEIGHT = 960;
-const COMMENTS_TOP = 960;
-const COMMENT_GAP = 16;
-const CARD_X = 48;
-const CARD_WIDTH = WIDTH - CARD_X * 2;
-const CARD_PADDING_TOP = 26;
-const CARD_PADDING_BOTTOM = 24;
-const TEXT_LINE_HEIGHT = 34;
-const PARAGRAPH_GAP = 8;
-const META_LINE_HEIGHT = 30;
-const META_MARGIN_TOP = 10;
-const MIN_COMMENT_HEIGHT = 136;
-const SCROLL_PIXELS_PER_SECOND = 88;
+export type CommentStyleName = "classic-dark" | "light" | "bilibili" | "douyin" | "xiaohongshu";
+export type SizeName = "small" | "medium" | "large";
+export type LineHeightName = "compact" | "standard" | "loose";
+export type SpeedName = "slow" | "standard" | "fast";
+export type LongCommentBehavior = "wrap" | "truncate" | "shrink";
+
+interface CommentTheme {
+  panelBg: string;
+  cardBg: string;
+  authorColor: string;
+  textColor: string;
+  metaColor: string;
+  avatarBg: string;
+  avatarText: string;
+}
+
+const THEMES: Record<CommentStyleName, CommentTheme> = {
+  "classic-dark": { panelBg: "#000000", cardBg: "#1a1a1a", authorColor: "#e5e7eb", textColor: "#f9fafb", metaColor: "#888888", avatarBg: "#3f3f46", avatarText: "#d4d4d8" },
+  light: { panelBg: "#f3f4f6", cardBg: "#ffffff", authorColor: "#1f2937", textColor: "#111827", metaColor: "#9ca3af", avatarBg: "#d4d4d8", avatarText: "#52525b" },
+  bilibili: { panelBg: "#0f1419", cardBg: "#18222b", authorColor: "#00a1d6", textColor: "#e3e5e7", metaColor: "#9499a0", avatarBg: "#00a1d6", avatarText: "#ffffff" },
+  douyin: { panelBg: "#000000", cardBg: "#161616", authorColor: "#fe2c55", textColor: "#ffffff", metaColor: "#999999", avatarBg: "#fe2c55", avatarText: "#ffffff" },
+  xiaohongshu: { panelBg: "#ffffff", cardBg: "#fff6f7", authorColor: "#ff2442", textColor: "#333333", metaColor: "#999999", avatarBg: "#ff2442", avatarText: "#ffffff" },
+};
+
+export interface CommentRenderStyle {
+  width: number;
+  height: number;
+  style: CommentStyleName;
+  fontSize: SizeName;
+  lineHeight: LineHeightName;
+  speed: SpeedName;
+  longCommentBehavior: LongCommentBehavior;
+  subtitleFontSize: SizeName;
+  subtitleLineHeight: LineHeightName;
+}
+
+const DEFAULT_STYLE: CommentRenderStyle = {
+  width: 1080,
+  height: 1920,
+  style: "classic-dark",
+  fontSize: "medium",
+  lineHeight: "standard",
+  speed: "standard",
+  longCommentBehavior: "wrap",
+  subtitleFontSize: "medium",
+  subtitleLineHeight: "standard",
+};
+
+interface Layout {
+  width: number;
+  height: number;
+  videoHeight: number;
+  commentsTop: number;
+  commentGap: number;
+  cardX: number;
+  cardWidth: number;
+  cardPaddingTop: number;
+  cardPaddingBottom: number;
+  authorBlock: number;
+  textLineHeight: number;
+  paragraphGap: number;
+  metaLineHeight: number;
+  metaMarginTop: number;
+  minCommentHeight: number;
+  scrollSpeed: number;
+  leftText: number;
+  textStart: number;
+  authorBaseline: number;
+  avatarCx: number;
+  avatarCy: number;
+  avatarR: number;
+  initialsBaseline: number;
+  authorFont: number;
+  textFont: number;
+  metaFont: number;
+  initialsFont: number;
+  charsPerLine: number;
+  maxLines: number;
+  ellipsis: boolean;
+  theme: CommentTheme;
+}
+
+function buildLayout(style: CommentRenderStyle): Layout {
+  const width = Math.max(320, Math.round(style.width) || 1080);
+  const height = Math.max(320, Math.round(style.height) || 1920);
+  const s = width / 1080;
+  const fontMul = style.fontSize === "small" ? 0.88 : style.fontSize === "large" ? 1.18 : 1;
+  const lhMul = style.lineHeight === "compact" ? 0.86 : style.lineHeight === "loose" ? 1.2 : 1;
+  const speedMul = style.speed === "slow" ? 0.6 : style.speed === "fast" ? 1.6 : 1;
+  const px = (value: number) => Math.round(value * s);
+
+  const cardX = px(48);
+  const cardWidth = width - cardX * 2;
+  const leftText = px(132);
+  const rightPad = px(48);
+  const textFont = Math.round(27 * s * fontMul);
+  const charsPerLine = Math.max(8, Math.floor((cardWidth - leftText - rightPad) / textFont));
+  const behavior = style.longCommentBehavior;
+  const maxLines = behavior === "truncate" ? 8 : behavior === "shrink" ? 14 : 20;
+  const ellipsis = behavior === "truncate";
+
+  return {
+    width,
+    height,
+    videoHeight: Math.round(height / 2),
+    commentsTop: Math.round(height / 2),
+    commentGap: px(16),
+    cardX,
+    cardWidth,
+    cardPaddingTop: px(26),
+    cardPaddingBottom: px(24),
+    authorBlock: px(52),
+    textLineHeight: Math.round(34 * s * lhMul),
+    paragraphGap: px(8),
+    metaLineHeight: px(30),
+    metaMarginTop: px(10),
+    minCommentHeight: px(136),
+    scrollSpeed: 88 * s * speedMul,
+    leftText,
+    textStart: px(86),
+    authorBaseline: px(46),
+    avatarCx: px(66),
+    avatarCy: px(62),
+    avatarR: px(40),
+    initialsBaseline: px(75),
+    authorFont: Math.round(26 * s * fontMul),
+    textFont,
+    metaFont: Math.round(24 * s * fontMul),
+    initialsFont: Math.round(34 * s * fontMul),
+    charsPerLine,
+    maxLines,
+    ellipsis,
+    theme: THEMES[style.style] || THEMES["classic-dark"],
+  };
+}
+
+const SUBTITLE_FONT_SIZE: Record<SizeName, number> = { small: 12, medium: 14, large: 18 };
+const SUBTITLE_LINE_SPACING: Record<LineHeightName, number> = { compact: -2, standard: 0, loose: 8 };
 
 export interface FfmpegCommentRenderProgress {
   stage: string;
@@ -36,6 +159,7 @@ export interface FfmpegCommentRenderOptions {
   fps?: number;
   signal?: AbortSignal;
   onProgress?: (progress: FfmpegCommentRenderProgress) => void;
+  style?: CommentRenderStyle;
 }
 
 interface LaidOutComment {
@@ -141,7 +265,7 @@ function wrapParagraph(paragraph: string, maxWidth: number): string[] {
   return lines;
 }
 
-function wrapText(text: string, maxWidth: number, maxLines: number): TextLine[] {
+function wrapText(text: string, maxWidth: number, maxLines: number, ellipsis = true): TextLine[] {
   const paragraphs = plainText(text)
     .split(/\n+/)
     .map((paragraph) => paragraph.trim())
@@ -158,7 +282,7 @@ function wrapText(text: string, maxWidth: number, maxLines: number): TextLine[] 
     if (lines.length >= maxLines) break;
   }
 
-  if (lines.length === maxLines) {
+  if (ellipsis && lines.length === maxLines) {
     const originalWidth = paragraphs.reduce((sum, paragraph) => sum + textWidth(paragraph), 0);
     const visibleWidth = lines.reduce((sum, line) => sum + textWidth(line.text), 0);
     if (originalWidth > visibleWidth) {
@@ -198,16 +322,16 @@ function readComments(commentPath?: string): Comment[] {
   return comments;
 }
 
-function layoutComments(comments: Comment[], avatarDir?: string): LaidOutComment[] {
+function layoutComments(comments: Comment[], layout: Layout, avatarDir?: string): LaidOutComment[] {
   return comments.map((comment) => {
-    const textLines = wrapText(comment.text || "", 29, 8);
+    const textLines = wrapText(comment.text || "", layout.charsPerLine, layout.maxLines, layout.ellipsis);
     const textBlockHeight = textLines.reduce(
-      (sum, line) => sum + TEXT_LINE_HEIGHT + (line.paragraphStart ? PARAGRAPH_GAP : 0),
+      (sum, line) => sum + layout.textLineHeight + (line.paragraphStart ? layout.paragraphGap : 0),
       0,
     );
     const height = Math.max(
-      MIN_COMMENT_HEIGHT,
-      CARD_PADDING_TOP + 52 + textBlockHeight + META_MARGIN_TOP + META_LINE_HEIGHT + CARD_PADDING_BOTTOM,
+      layout.minCommentHeight,
+      layout.cardPaddingTop + layout.authorBlock + textBlockHeight + layout.metaMarginTop + layout.metaLineHeight + layout.cardPaddingBottom,
     );
     return {
       comment,
@@ -244,64 +368,68 @@ function metaItems(comment: Comment): string[] {
   return items;
 }
 
-function renderCommentCard(item: LaidOutComment, x: number, y: number): string {
+function renderCommentCard(item: LaidOutComment, x: number, y: number, layout: Layout): string {
   const { comment, textLines, height, avatarDataUri } = item;
+  const { theme } = layout;
   const author = escapeXml(plainText(comment.author || "匿名用户"));
   const clipId = `avatar-${escapeXml(comment.id)}-${Math.round(y)}`;
-  let cursorY = y + 86;
+  const cx = x + layout.avatarCx;
+  const cy = y + layout.avatarCy;
+  const r = layout.avatarR;
+  let cursorY = y + layout.textStart;
   const textSvg = textLines.map((line) => {
-    if (line.paragraphStart) cursorY += PARAGRAPH_GAP;
-    const tspan = `<tspan x="${x + 132}" y="${cursorY}">${escapeXml(line.text)}</tspan>`;
-    cursorY += TEXT_LINE_HEIGHT;
+    if (line.paragraphStart) cursorY += layout.paragraphGap;
+    const tspan = `<tspan x="${x + layout.leftText}" y="${cursorY}">${escapeXml(line.text)}</tspan>`;
+    cursorY += layout.textLineHeight;
     return tspan;
   }).join("");
   const metaText = escapeXml(metaItems(comment).join("    "));
-  const metaY = cursorY + META_MARGIN_TOP;
+  const metaY = cursorY + layout.metaMarginTop;
 
   return `
     <g>
-      <rect x="${x}" y="${y}" width="${CARD_WIDTH}" height="${height}" rx="14" fill="#1a1a1a"/>
-      <clipPath id="${clipId}"><circle cx="${x + 66}" cy="${y + 62}" r="40"/></clipPath>
-      <circle cx="${x + 66}" cy="${y + 62}" r="40" fill="#3f3f46"/>
+      <rect x="${x}" y="${y}" width="${layout.cardWidth}" height="${height}" rx="14" fill="${theme.cardBg}"/>
+      <clipPath id="${clipId}"><circle cx="${cx}" cy="${cy}" r="${r}"/></clipPath>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="${theme.avatarBg}"/>
       ${
         avatarDataUri
-          ? `<image href="${avatarDataUri}" x="${x + 26}" y="${y + 22}" width="80" height="80" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"/>`
-          : `<text x="${x + 66}" y="${y + 75}" text-anchor="middle" font-size="34" font-weight="800" fill="#d4d4d8">${initials(comment.author || "")}</text>`
+          ? `<image href="${avatarDataUri}" x="${cx - r}" y="${cy - r}" width="${r * 2}" height="${r * 2}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clipId})"/>`
+          : `<text x="${cx}" y="${y + layout.initialsBaseline}" text-anchor="middle" font-size="${layout.initialsFont}" font-weight="800" fill="${theme.avatarText}">${initials(comment.author || "")}</text>`
       }
-      <text x="${x + 132}" y="${y + 46}" font-size="26" font-weight="700" fill="#e5e7eb">${author}</text>
-      <text x="${x + 132}" y="${y + 86}" font-size="27" font-weight="500" fill="#f9fafb">${textSvg}</text>
-      <text x="${x + 132}" y="${metaY}" font-size="24" font-weight="500" fill="#888888">${metaText}</text>
+      <text x="${x + layout.leftText}" y="${y + layout.authorBaseline}" font-size="${layout.authorFont}" font-weight="700" fill="${theme.authorColor}">${author}</text>
+      <text x="${x + layout.leftText}" y="${y + layout.textStart}" font-size="${layout.textFont}" font-weight="500" fill="${theme.textColor}">${textSvg}</text>
+      <text x="${x + layout.leftText}" y="${metaY}" font-size="${layout.metaFont}" font-weight="500" fill="${theme.metaColor}">${metaText}</text>
     </g>
   `;
 }
 
-function overlaySvg(comments: LaidOutComment[], frame: number, fps: number): string {
-  const panelHeight = HEIGHT - COMMENTS_TOP;
-  const cycleHeight = comments.reduce((sum, comment) => sum + comment.height + COMMENT_GAP, 0);
+function overlaySvg(comments: LaidOutComment[], frame: number, fps: number, layout: Layout): string {
+  const panelHeight = layout.height - layout.commentsTop;
+  const cycleHeight = comments.reduce((sum, comment) => sum + comment.height + layout.commentGap, 0);
   const offset = cycleHeight > 0
-    ? ((frame / fps) * SCROLL_PIXELS_PER_SECOND) % cycleHeight
+    ? ((frame / fps) * layout.scrollSpeed) % cycleHeight
     : 0;
   const repeats = cycleHeight > 0 ? Math.ceil((panelHeight + cycleHeight) / cycleHeight) + 1 : 0;
   const cards: string[] = [];
 
   for (let repeat = 0; repeat < repeats; repeat++) {
-    let cursorY = COMMENTS_TOP + repeat * cycleHeight - offset;
+    let cursorY = layout.commentsTop + repeat * cycleHeight - offset;
     for (const item of comments) {
       const y = cursorY;
-      if (y <= HEIGHT && y + item.height >= COMMENTS_TOP) {
-        cards.push(renderCommentCard(item, CARD_X, y));
+      if (y <= layout.height && y + item.height >= layout.commentsTop) {
+        cards.push(renderCommentCard(item, layout.cardX, y, layout));
       }
-      cursorY += item.height + COMMENT_GAP;
+      cursorY += item.height + layout.commentGap;
     }
   }
 
   return `
-    <svg width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+    <svg width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}" xmlns="http://www.w3.org/2000/svg">
       <style>
         text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
       </style>
-      <rect x="0" y="${COMMENTS_TOP}" width="${WIDTH}" height="${panelHeight}" fill="#000000"/>
-      <clipPath id="comments-panel"><rect x="0" y="${COMMENTS_TOP}" width="${WIDTH}" height="${panelHeight}"/></clipPath>
+      <rect x="0" y="${layout.commentsTop}" width="${layout.width}" height="${panelHeight}" fill="${layout.theme.panelBg}"/>
+      <clipPath id="comments-panel"><rect x="0" y="${layout.commentsTop}" width="${layout.width}" height="${panelHeight}"/></clipPath>
       <g clip-path="url(#comments-panel)">${cards.join("")}</g>
     </svg>
   `;
@@ -321,18 +449,21 @@ function writeFrame(stdin: NodeJS.WritableStream, buffer: Buffer): Promise<void>
   });
 }
 
-function ffmpegSubtitleFilter(subtitlePath?: string): string {
+function ffmpegSubtitleFilter(subtitlePath: string | undefined, fontSize: number, lineHeight: LineHeightName): string {
   if (!subtitlePath) return "";
   const escapedPath = subtitlePath.replace(/'/g, "'\\''").replace(/:/g, "\\:");
-  const style = "FontSize=14\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=2\\,Shadow=0";
+  const outline = Math.max(1, Math.round(fontSize / 7));
+  const lineSpacing = SUBTITLE_LINE_SPACING[lineHeight] ?? 0;
+  const style = `FontSize=${fontSize}\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=${outline}\\,Shadow=0\\,LineSpacing=${lineSpacing}`;
   return `,subtitles='${escapedPath}':force_style='${style}'`;
 }
 
-function buildFilter(options: FfmpegCommentRenderOptions): string {
-  const subtitleFilter = ffmpegSubtitleFilter(options.subtitlePath);
-  const loopVideo = `[0:v]setpts=PTS-STARTPTS,scale=${WIDTH}:${VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black${subtitleFilter}[video]`;
+function buildFilter(options: FfmpegCommentRenderOptions, layout: Layout, subtitleFontSize: number, subtitleLineHeight: LineHeightName): string {
+  const subtitleFilter = ffmpegSubtitleFilter(options.subtitlePath, subtitleFontSize, subtitleLineHeight);
+  const { width, height, videoHeight } = layout;
+  const loopVideo = `[0:v]setpts=PTS-STARTPTS,scale=${width}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${width}:${videoHeight}:(ow-iw)/2:(oh-ih)/2:black${subtitleFilter}[video]`;
   return [
-    `color=c=black:s=${WIDTH}x${HEIGHT}:d=${options.durationSec}[canvas]`,
+    `color=c=black:s=${width}x${height}:d=${options.durationSec}[canvas]`,
     loopVideo,
     `[canvas][video]overlay=0:0:shortest=0[base]`,
     `[1:v]format=rgba[overlay]`,
@@ -344,9 +475,13 @@ export async function renderFfmpegComments(
   options: FfmpegCommentRenderOptions,
 ): Promise<void> {
   const fps = options.fps || 30;
-  const comments = layoutComments(readComments(options.commentPath), options.avatarDir);
+  const style = { ...DEFAULT_STYLE, ...(options.style || {}) };
+  const layout = buildLayout(style);
+  const subtitleFontSize = SUBTITLE_FONT_SIZE[style.subtitleFontSize] || SUBTITLE_FONT_SIZE.medium;
+  const subtitleLineHeight = style.subtitleLineHeight || "standard";
+  const comments = layoutComments(readComments(options.commentPath), layout, options.avatarDir);
   const totalFrames = Math.ceil(options.durationSec * fps);
-  const filter = buildFilter(options);
+  const filter = buildFilter(options, layout, subtitleFontSize, subtitleLineHeight);
 
   emit(options, "encoding", 8, `准备 FFmpeg 评论层 (${comments.length} 条)...`);
 
@@ -370,8 +505,9 @@ export async function renderFfmpegComments(
     "-b:a", "128k",
     "-shortest",
     "-movflags", "+faststart",
-    options.outputPath,
   ];
+  ffmpegArgs.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+  ffmpegArgs.push(options.outputPath);
 
   const proc = spawn("ffmpeg", ffmpegArgs, {
     cwd: process.cwd(),
@@ -394,7 +530,7 @@ export async function renderFfmpegComments(
       proc.kill("SIGKILL");
       throw new Error("ffmpeg comments render aborted");
     }
-    const svg = overlaySvg(comments, frame, fps);
+    const svg = overlaySvg(comments, frame, fps, layout);
     const png = await sharp(Buffer.from(svg)).png().toBuffer();
     await writeFrame(proc.stdin, png);
     if (frame % Math.max(1, fps) === 0) {

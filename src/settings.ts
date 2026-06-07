@@ -2,7 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { DATA_DIR, SETTINGS_FILE } from "./config";
-import type { SourcePlatform, TargetPlatform } from "./jobs/types";
+import type { TargetPlatform } from "./jobs/types";
 
 export type PublishAction = "draft" | "publish";
 export type LlmServiceMode = "managed" | "custom";
@@ -14,22 +14,11 @@ export type AgentImChannelType = "wechat" | "wecom" | "lark" | "dingtalk" | "qq"
 export interface RevideoSettings {
   version: 2;
   task: {
-    source: {
-      defaultPlatform: SourcePlatform;
-      duplicateStrategy: "block" | "overwrite" | "reuse-assets";
-      loginMode: "platform-session" | "no-login";
-      sourceLanguage: "auto" | string;
-    };
     storage: {
       taskDataDir: string;
     };
     download: {
-      videoQuality: "auto" | "best" | "1080p" | "720p" | "480p";
-      qualityFallback: "down" | "up" | "exact";
-      audioMode: "follow-video" | "best-audio" | "none";
-      subtitleMode: "platform-preferred" | "all" | "none";
-      subtitleFallback: "skip" | "speech-to-text";
-      commentSampling: "duration" | "fixed" | "hot" | "latest";
+      videoQuality: "auto" | "best" | "8k" | "4k" | "2k" | "1080p" | "720p" | "480p";
       commentSeconds: number;
       maxComments: number;
       retryCount: number;
@@ -37,26 +26,20 @@ export interface RevideoSettings {
     };
     prepare: {
       outputAspect: "auto" | "portrait" | "landscape" | "source";
-      outputResolution: "auto" | "1080x1920" | "720x1280" | "1920x1080" | string;
+      outputResolution: "auto" | "best" | "8k" | "4k" | "2k" | "1080p" | "720p" | "480p";
       fitMode: "smart-crop" | "blur-background" | "keep-bars" | "center-crop";
-      audioNormalize: "auto" | "off";
       subtitleCleanup: "merge-short" | "keep";
-      commentCleanup: Array<"dedupe" | "drop-empty" | "keep-order" | "hot-order">;
     };
     translation: {
       targetLanguage: string;
       subtitleMode: "auto" | "always" | "off";
       commentMode: "auto" | "always" | "off";
       bilingualSubtitles: boolean;
-      glossary: string;
       sensitiveContent: "preserve" | "soften" | "mark" | "delete";
       styleConstraints: string[];
       prompts: {
         subtitle: string;
         comment: string;
-        title: string;
-        description: string;
-        tags: string;
       };
     };
     coverAndCopy: {
@@ -70,27 +53,17 @@ export interface RevideoSettings {
     render: {
       outputDir: string;
       renderComments: boolean;
-      commentStyle: "classic-dark" | "light" | "bilibili" | "douyin" | "xiaohongshu";
       commentFontSize: "small" | "medium" | "large";
       commentLineHeight: "compact" | "standard" | "loose";
       subtitleFontSize: "small" | "medium" | "large";
       subtitleLineHeight: "compact" | "standard" | "loose";
       commentContent: "original-translated" | "translated-only" | "auto";
       longCommentBehavior: "wrap" | "truncate" | "shrink";
-      commentSpeed: "slow" | "standard" | "fast";
       repeatTimes: number;
       outputFormat: "mp4" | "mov";
     };
     publish: {
       defaultPlatforms: TargetPlatform[];
-      defaultAction: PublishAction;
-      retryCount: number;
-      preflightChecks: {
-        login: boolean;
-        files: boolean;
-        copy: boolean;
-        adapter: boolean;
-      };
       platformConfigs: {
         bilibili: {
           defaultAction: PublishAction;
@@ -156,7 +129,6 @@ export interface RevideoSettings {
     provider: string;
     baseUrl: string;
     apiKeyEnv: string;
-    apiKey: string;
     textModel: string;
     visionModel: string;
     thinking: "off" | "auto" | "low" | "medium" | "high";
@@ -200,22 +172,11 @@ export function defaultRenderDir(): string {
 export const defaultSettings: RevideoSettings = {
   version: 2,
   task: {
-    source: {
-      defaultPlatform: "auto",
-      duplicateStrategy: "block",
-      loginMode: "platform-session",
-      sourceLanguage: "auto",
-    },
     storage: {
       taskDataDir: defaultTaskDataDir(),
     },
     download: {
       videoQuality: "auto",
-      qualityFallback: "down",
-      audioMode: "follow-video",
-      subtitleMode: "platform-preferred",
-      subtitleFallback: "skip",
-      commentSampling: "duration",
       commentSeconds: 2,
       maxComments: 800,
       retryCount: 2,
@@ -223,26 +184,20 @@ export const defaultSettings: RevideoSettings = {
     },
     prepare: {
       outputAspect: "portrait",
-      outputResolution: "1080x1920",
+      outputResolution: "auto",
       fitMode: "smart-crop",
-      audioNormalize: "auto",
       subtitleCleanup: "merge-short",
-      commentCleanup: ["dedupe", "drop-empty"],
     },
     translation: {
       targetLanguage: "zh-CN",
       subtitleMode: "auto",
       commentMode: "auto",
       bilingualSubtitles: false,
-      glossary: "",
       sensitiveContent: "preserve",
       styleConstraints: ["自然口语", "本土化表达"],
       prompts: {
         subtitle: "保持字幕简洁自然，符合目标语言视频口语表达，保留必要专有名词。",
         comment: "将非中文评论翻译为自然中文；中文评论保持原文；保留用户语气但不要美化危险内容。",
-        title: "生成适合短视频平台的标题，清晰、有吸引力，但不要捏造事实。",
-        description: "生成简洁的平台简介，说明来源内容已翻译整理。",
-        tags: "生成与视频主题高度相关的平台标签或话题。",
       },
     },
     coverAndCopy: {
@@ -256,27 +211,17 @@ export const defaultSettings: RevideoSettings = {
     render: {
       outputDir: defaultRenderDir(),
       renderComments: true,
-      commentStyle: "classic-dark",
       commentFontSize: "medium",
       commentLineHeight: "standard",
       subtitleFontSize: "medium",
       subtitleLineHeight: "standard",
       commentContent: "original-translated",
       longCommentBehavior: "wrap",
-      commentSpeed: "standard",
       repeatTimes: 1,
       outputFormat: "mp4",
     },
     publish: {
       defaultPlatforms: ["bilibili"],
-      defaultAction: "publish",
-      retryCount: 1,
-      preflightChecks: {
-        login: true,
-        files: true,
-        copy: true,
-        adapter: true,
-      },
       platformConfigs: {
         bilibili: {
           defaultAction: "publish",
@@ -342,7 +287,6 @@ export const defaultSettings: RevideoSettings = {
     provider: "managed",
     baseUrl: "",
     apiKeyEnv: "OPENAI_API_KEY",
-    apiKey: "",
     textModel: "gpt-4.1-mini",
     visionModel: "gpt-4.1-mini",
     thinking: "auto",

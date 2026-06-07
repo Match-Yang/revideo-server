@@ -5,7 +5,20 @@ import https from "https";
 import http from "http";
 import type { DirInfo, Comment } from "./types";
 import { scanMoviesDir } from "./scan-dir";
-import { renderFfmpegComments } from "./renderers/ffmpeg-comments";
+import { renderFfmpegComments, type CommentRenderStyle, type LineHeightName, type SizeName } from "./renderers/ffmpeg-comments";
+
+export interface RenderConfig {
+  style?: CommentRenderStyle;
+  outputFormat?: "mp4" | "mov";
+  outputAspect?: "auto" | "portrait" | "landscape" | "source" | string;
+  outputResolution?: "auto" | string;
+  fitMode?: "smart-crop" | "blur-background" | "keep-bars" | "center-crop" | string;
+  subtitleFontSize?: SizeName;
+  subtitleLineHeight?: LineHeightName;
+}
+
+const NON_COMMENT_SUBTITLE_FONT: Record<SizeName, number> = { small: 12, medium: 14, large: 18 };
+const SUBTITLE_LINE_SPACING: Record<LineHeightName, number> = { compact: -2, standard: 0, loose: 8 };
 
 const PROXY = "http://127.0.0.1:7897";
 
@@ -107,6 +120,47 @@ function getVideoDimensions(videoPath: string): { width: number; height: number 
   } catch {
     return { width: 1920, height: 1080 };
   }
+}
+
+function resolutionTier(value: string | undefined): number | undefined {
+  if (!value || value === "auto" || value === "best") return undefined;
+  const named: Record<string, number> = {
+    "8k": 4320,
+    "4k": 2160,
+    "2k": 1440,
+  };
+  const tier = named[value.toLowerCase()] ?? Number(value.match(/^(\d+)p$/i)?.[1]);
+  return Number.isFinite(tier) && tier > 0 ? tier : undefined;
+}
+
+function parseResolution(value: string | undefined, aspect: string | undefined, source: { width: number; height: number }): { width: number; height: number } | undefined {
+  if (!value || value === "auto") return undefined;
+  const exact = value.match(/^(\d+)x(\d+)$/i);
+  if (exact) return { width: Number(exact[1]), height: Number(exact[2]) };
+  const tier = resolutionTier(value);
+  if (!tier) return undefined;
+  if (aspect === "landscape") return { width: Math.round((tier * 16) / 9), height: tier };
+  if (aspect === "source" || aspect === "auto") {
+    const ratio = source.width / Math.max(1, source.height);
+    return { width: Math.round(tier * ratio), height: tier };
+  }
+  return { width: tier, height: Math.round((tier * 16) / 9) };
+}
+
+function targetDimensions(sourcePath: string, renderConfig?: RenderConfig): { width: number; height: number } {
+  const source = getVideoDimensions(sourcePath);
+  const resolution = parseResolution(renderConfig?.outputResolution, renderConfig?.outputAspect, source);
+  if (resolution) return resolution;
+  if (renderConfig?.outputAspect === "source" || renderConfig?.outputAspect === "auto") return source;
+  if (renderConfig?.outputAspect === "landscape") return { width: 1920, height: 1080 };
+  return { width: 1080, height: 1920 };
+}
+
+function videoFitFilter(width: number, height: number, fitMode?: string): string {
+  if (fitMode === "keep-bars" || fitMode === "blur-background") {
+    return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
+  }
+  return `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
 }
 
 export function preparePublicDir(dir: DirInfo) {
@@ -220,7 +274,8 @@ export async function renderWithFFmpeg(
   dir: DirInfo,
   onProgress?: (progress: RenderProgress) => void,
   signal?: AbortSignal,
-  outputDir?: string
+  outputDir?: string,
+  renderConfig?: RenderConfig
 ): Promise<{ output: string; durationSec: number }> {
   const emit = (stage: string, percent: number, message: string) => {
     onProgress?.({ stage, percent, message });
@@ -236,6 +291,7 @@ export async function renderWithFFmpeg(
 
   const videoExt = path.extname(dir.videoFile!);
   const sourceVideoPath = path.join(PUBLIC_DIR, `video${videoExt}`);
+  const target = targetDimensions(sourceVideoPath, renderConfig);
   const sourceVideoDurationSec = getVideoDuration(sourceVideoPath);
   const repeatTimes = Math.min(10, Math.max(1, Number(dir.repeatTimes || 1)));
   let durationSec = sourceVideoDurationSec * repeatTimes;
@@ -254,7 +310,8 @@ export async function renderWithFFmpeg(
     fs.mkdirSync(resolvedOutDir, { recursive: true });
   }
 
-  const absOutputPath = path.join(resolvedOutDir, `${dir.name}.mp4`);
+  const outputFormat = renderConfig?.outputFormat || "mp4";
+  const absOutputPath = path.join(resolvedOutDir, `${dir.name}.${outputFormat}`);
   const subtitlePath = dir.subtitleFiles.length > 0
     ? path.join(PUBLIC_DIR, path.basename(dir.subtitleFiles[0]))
     : undefined;
@@ -272,23 +329,26 @@ export async function renderWithFFmpeg(
       fps: 30,
       signal,
       onProgress,
+      style: renderConfig?.style,
     });
   } else {
     const vfParts: string[] = [];
+    vfParts.push(videoFitFilter(target.width, target.height, renderConfig?.fitMode));
 
     if (subtitlePath) {
       const tmpSub = `/tmp/revideo-${dir.name}.vtt`;
       fs.copyFileSync(subtitlePath, tmpSub);
-      const dims = getVideoDimensions(sourceVideoPath);
-      const isPortrait = dims.height > dims.width;
-      const fontSize = 14;
+      const isPortrait = target.height > target.width;
+      const sizeName = renderConfig?.subtitleFontSize || "medium";
+      const fontSize = NON_COMMENT_SUBTITLE_FONT[sizeName];
+      const lineSpacing = SUBTITLE_LINE_SPACING[renderConfig?.subtitleLineHeight || "standard"];
       const outlineWidth = Math.max(1, Math.round(fontSize / 8));
       if (isPortrait) {
         const marginV = Math.round(288 / 3);
-        const escapedStyle = `FontSize=${fontSize}\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=${outlineWidth}\\,Shadow=0\\,Alignment=8\\,MarginV=${marginV}`;
+        const escapedStyle = `FontSize=${fontSize}\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=${outlineWidth}\\,Shadow=0\\,Alignment=8\\,MarginV=${marginV}\\,LineSpacing=${lineSpacing}`;
         vfParts.push(`subtitles=${tmpSub}:force_style=${escapedStyle}`);
       } else {
-        const escapedStyle = `FontSize=${fontSize}\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=${outlineWidth}\\,Shadow=0`;
+        const escapedStyle = `FontSize=${fontSize}\\,PrimaryColour=&Hffffff\\,OutlineColour=&H40000000\\,BackColour=&H80000000\\,Outline=${outlineWidth}\\,Shadow=0\\,LineSpacing=${lineSpacing}`;
         vfParts.push(`subtitles=${tmpSub}:force_style=${escapedStyle}`);
       }
     }
@@ -302,6 +362,7 @@ export async function renderWithFFmpeg(
       "-t", String(durationSec),
     ];
     if (vf) ffmpegArgs.push("-vf", vf);
+    ffmpegArgs.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
     ffmpegArgs.push(
       "-c:v", "libx264",
       "-preset", "medium",

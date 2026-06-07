@@ -193,6 +193,18 @@ const languages = [
 ];
 
 const styleConstraintOptions = ["自然口语", "保守直译", "短视频口吻", "新闻解说", "专业测评", "夸张吸睛", "幽默吐槽", "克制高级", "本土化表达", "保留原文语气", "适合 B 站", "适合抖音", "适合小红书", "适合 YouTube"];
+const resolutionOptions: Array<[string, string]> = [["auto", "自动"], ["best", "最高清"], ["8k", "8K"], ["4k", "4K"], ["2k", "2K"], ["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]];
+const resolutionOptionHelp = {
+  auto: "由系统自动选择最合适的分辨率。",
+  best: "使用可用的最高分辨率。",
+  "8k": "目标 8K（4320p），不存在则向下兼容更低分辨率。",
+  "4k": "目标 4K（2160p），不存在则向下兼容更低分辨率。",
+  "2k": "目标 2K（1440p），不存在则向下兼容更低分辨率。",
+  "1080p": "目标 1080p，不存在则向下兼容更低分辨率。",
+  "720p": "目标 720p，不存在则向下兼容更低分辨率。",
+  "480p": "目标 480p，不存在则向下兼容更低分辨率。",
+};
+const resolutionOptionValues = new Set(resolutionOptions.map(([value]) => value));
 const agentChannels = [
   ["wechat", "微信"],
   ["wecom", "企业微信"],
@@ -211,6 +223,11 @@ function getNested<T>(source: unknown, path: string, fallback: T): T {
     return undefined;
   }, source);
   return (value as T | undefined) ?? fallback;
+}
+
+function normalizedResolutionOption(value: unknown, fallback = "auto"): string {
+  const next = typeof value === "string" ? value : fallback;
+  return resolutionOptionValues.has(next) ? next : fallback;
 }
 
 function currentStep(job: RevideoJob) {
@@ -348,7 +365,6 @@ function parseFieldValue(name: string, value: FormDataEntryValue) {
     "task.download.timeoutSec",
     "task.coverAndCopy.fixedFrameIndex",
     "task.render.repeatTimes",
-    "task.publish.retryCount",
     "llm.timeoutSec",
     "llm.retryCount",
   ]);
@@ -500,26 +516,24 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          source: { url, platform: formString(data, "sourcePlatform", "auto") },
+          source: { url },
           targets: createTargets.map((platform) => ({ platform })),
           options: {
             repeatTimes: nextRepeatTimes,
             downloadQuality: formString(data, "downloadQuality", "auto"),
-            outputAspect: formString(data, "outputAspect", "portrait"),
-            outputResolution: formString(data, "outputResolution", "1080x1920"),
             renderComments: data.get("renderComments") === "on",
             targetLanguage: formString(data, "targetLanguage", "zh-CN"),
-            publishAction: formString(data, "publishAction", "draft"),
-            coverTemplate: formString(data, "coverTemplate", DEFAULT_COVER_TEMPLATE),
-            coverImageMode: formString(data, "coverImageMode", "ai"),
-            coverCopyMode: formString(data, "coverCopyMode", "ai"),
+            subtitleMode: formString(data, "subtitleMode", "auto"),
+            commentMode: formString(data, "commentMode", "auto"),
             bilingualSubtitles: data.get("bilingualSubtitles") === "on",
+            sensitiveContent: formString(data, "sensitiveContent", "preserve"),
+            styleConstraints: formString(data, "styleConstraints")
+              .split(/[,，]/)
+              .map((item) => item.trim())
+              .filter(Boolean),
             promptOverrides: {
               subtitle: formString(data, "promptSubtitle"),
               comment: formString(data, "promptComment"),
-              title: formString(data, "promptTitle"),
-              description: formString(data, "promptDescription"),
-              tags: formString(data, "promptTags"),
             },
           },
         }),
@@ -543,10 +557,6 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     const booleanFields = new Set([
       "task.translation.bilingualSubtitles",
       "task.render.renderComments",
-      "task.publish.preflightChecks.login",
-      "task.publish.preflightChecks.files",
-      "task.publish.preflightChecks.copy",
-      "task.publish.preflightChecks.adapter",
       "task.publish.platformConfigs.tiktok.allowComment",
       "task.publish.platformConfigs.tiktok.allowDuet",
       "task.publish.platformConfigs.tiktok.allowStitch",
@@ -639,12 +649,12 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
           创建任务
         </Button>
       </DialogTrigger>
-      <DialogContent className="!block !max-w-[calc(100vw-2rem)] !gap-0 sm:!max-w-[720px] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] overflow-hidden p-0">
+      <DialogContent className="!block !max-w-[calc(100vw-2rem)] !gap-0 sm:!max-w-[480px] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] overflow-hidden p-0">
         {/* Header */}
         <div className="shrink-0 border-b px-6 py-4">
           <DialogHeader>
-            <DialogTitle className="font-semibold text-base">创建新任务</DialogTitle>
-            <DialogDescription className="text-xs">粘贴视频链接，按需调整下方选项。</DialogDescription>
+            <DialogTitle className="font-semibold text-base">{t("create.dialogTitle")}</DialogTitle>
+            <DialogDescription className="text-xs">{t("create.dialogDescription")}</DialogDescription>
           </DialogHeader>
         </div>
 
@@ -668,7 +678,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
               return (
                 <div className="mt-2 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-700 text-xs ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:ring-amber-900/60">
                   <XCircle className="mt-0.5 size-3.5 shrink-0" />
-                  <span>已存在相同链接的任务，继续创建将覆盖旧任务及其全部数据。</span>
+                  <span>{t("create.duplicateWarning")}</span>
                 </div>
               );
             })()}
@@ -676,7 +686,15 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
 
           {/* Core options — icon | label : control rows */}
           <div className="grid gap-1 px-6 py-1">
-            <DialogRow icon={RotateCcw} label="重复次数">
+            <DialogRow icon={Download} label={t("create.downloadQuality")}>
+              <NativeSelect name="downloadQuality" defaultValue={normalizedResolutionOption(getNested(settings, "task.download.videoQuality", "auto"))} className="max-w-40">
+                {resolutionOptions.map(([value, label]) => (
+                  <NativeSelectOption key={value} value={value}>{value === "auto" ? t("create.auto") : value === "best" ? t("create.best") : label}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </DialogRow>
+
+            <DialogRow icon={RotateCcw} label={t("create.repeatTimes")}>
               <div className="flex items-center gap-2.5">
                 <Input
                   name="repeatTimes"
@@ -687,140 +705,89 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
                   onChange={(event) => setRepeatTimes(Number(event.target.value || 1))}
                   className="h-8 w-14 text-center"
                 />
-                <span className="text-muted-foreground text-xs">次（最多 10）</span>
+                <span className="text-muted-foreground text-xs">{t("create.repeatTimesSuffix")}</span>
               </div>
             </DialogRow>
 
-            <DialogRow icon={MessageSquare} label="渲染评论">
+            <DialogRow icon={MessageSquare} label={t("create.renderComments")}>
               <Switch
                 name="renderComments"
                 defaultChecked={getNested(settings, "task.render.renderComments", true)}
               />
             </DialogRow>
 
-            <DialogRow icon={Globe} label="目标平台">
+            <DialogRow icon={Globe} label={t("create.targetPlatforms")}>
               {platformChooser(createTargets, setCreateTargets)}
-            </DialogRow>
-
-            <DialogRow icon={Send} label="发布方式">
-              <NativeSelect
-                name="publishAction"
-                defaultValue={getNested(settings, "task.publish.defaultAction", "publish")}
-                className="max-w-44"
-              >
-                <NativeSelectOption value="draft">保存平台草稿</NativeSelectOption>
-                <NativeSelectOption value="publish">立即发布</NativeSelectOption>
-              </NativeSelect>
             </DialogRow>
           </div>
 
           {/* Advanced collapsible sections */}
           <div className="px-4 py-2">
             <div className="mb-2 px-2">
-              <span className="select-none text-muted-foreground text-xs">高级选项</span>
+              <span className="select-none text-muted-foreground text-xs">{t("create.advancedOptions")}</span>
             </div>
             <Accordion type="multiple" defaultValue={[]} className="grid gap-1.5">
-              <SettingsAccordionItem value="download" title="下载设置" description="视频质量、输出画幅和来源平台。" icon={SlidersHorizontal} compact>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <FieldControl label="视频下载分辨率" help="平台不支持时自动 fallback 到最近版本。">
-                    <NativeSelect name="downloadQuality" defaultValue={getNested(settings, "task.download.videoQuality", "auto")}>
-                      <NativeSelectOption value="auto">自动</NativeSelectOption>
-                      <NativeSelectOption value="best">最高清</NativeSelectOption>
-                      <NativeSelectOption value="1080p">1080p</NativeSelectOption>
-                      <NativeSelectOption value="720p">720p</NativeSelectOption>
-                      <NativeSelectOption value="480p">480p</NativeSelectOption>
-                    </NativeSelect>
-                  </FieldControl>
-                  <FieldControl label="输出画幅">
-                    <NativeSelect name="outputAspect" defaultValue={getNested(settings, "task.prepare.outputAspect", "portrait")}>
-                      <NativeSelectOption value="auto">自动</NativeSelectOption>
-                      <NativeSelectOption value="portrait">竖屏 9:16</NativeSelectOption>
-                      <NativeSelectOption value="landscape">横屏 16:9</NativeSelectOption>
-                      <NativeSelectOption value="source">保持原视频</NativeSelectOption>
-                    </NativeSelect>
-                  </FieldControl>
-                  <FieldControl label="输出分辨率">
-                    <NativeSelect name="outputResolution" defaultValue={getNested(settings, "task.prepare.outputResolution", "1080x1920")}>
-                      <NativeSelectOption value="auto">自动</NativeSelectOption>
-                      <NativeSelectOption value="1080x1920">1080x1920</NativeSelectOption>
-                      <NativeSelectOption value="720x1280">720x1280</NativeSelectOption>
-                      <NativeSelectOption value="1920x1080">1920x1080</NativeSelectOption>
-                    </NativeSelect>
-                  </FieldControl>
-                  <FieldControl label="来源平台" help="默认自动识别，失败时才需手动指定。">
-                    <NativeSelect name="sourcePlatform" defaultValue="auto">
-                      <NativeSelectOption value="auto">自动</NativeSelectOption>
-                      <NativeSelectOption value="youtube">YouTube</NativeSelectOption>
-                      <NativeSelectOption value="tiktok">TikTok</NativeSelectOption>
-                      <NativeSelectOption value="bilibili">Bilibili</NativeSelectOption>
-                      <NativeSelectOption value="douyin">Douyin</NativeSelectOption>
-                    </NativeSelect>
-                  </FieldControl>
-                </div>
-              </SettingsAccordionItem>
-
-              <SettingsAccordionItem value="language" title="语言与提示词" description="目标语言、双语字幕和额外提示词。" icon={Globe} compact autoHeight>
-                <div className="grid gap-4">
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
-                    <FieldControl label="目标语言">
+              <SettingsAccordionItem value="translation" title={t("create.translation")} description={t("create.translationDescription")} icon={Globe} compact autoHeight>
+                <div className="grid gap-1 px-2 pb-2">
+                    <DialogRow icon={Globe} label={t("create.targetLanguage")}>
                       <NativeSelect name="targetLanguage" defaultValue={getNested(settings, "task.translation.targetLanguage", "zh-CN")}>
                         {languages.map((code) => <NativeSelectOption key={code} value={code}>{t(`languages.${code}`)}</NativeSelectOption>)}
                       </NativeSelect>
-                    </FieldControl>
-                    <SwitchRow label="双语字幕" name="bilingualSubtitles" defaultChecked={getNested(settings, "task.translation.bilingualSubtitles", false)} />
-                  </div>
+                    </DialogRow>
+                    <DialogRow icon={Globe} label={t("create.subtitleMode")}>
+                      <NativeSelect name="subtitleMode" defaultValue={getNested(settings, "task.translation.subtitleMode", "auto")}>
+                        <NativeSelectOption value="auto">{t("create.auto")}</NativeSelectOption>
+                        <NativeSelectOption value="always">{t("create.alwaysTranslate")}</NativeSelectOption>
+                        <NativeSelectOption value="off">{t("create.noTranslate")}</NativeSelectOption>
+                      </NativeSelect>
+                    </DialogRow>
+                    <DialogRow icon={MessageSquare} label={t("create.commentMode")}>
+                      <NativeSelect name="commentMode" defaultValue={getNested(settings, "task.translation.commentMode", "auto")}>
+                        <NativeSelectOption value="auto">{t("create.auto")}</NativeSelectOption>
+                        <NativeSelectOption value="always">{t("create.alwaysTranslate")}</NativeSelectOption>
+                        <NativeSelectOption value="off">{t("create.noTranslate")}</NativeSelectOption>
+                      </NativeSelect>
+                    </DialogRow>
+                    <DialogRow icon={SlidersHorizontal} label={t("create.sensitiveContent")}>
+                      <NativeSelect name="sensitiveContent" defaultValue={getNested(settings, "task.translation.sensitiveContent", "preserve")}>
+                        <NativeSelectOption value="preserve">{t("create.preserve")}</NativeSelectOption>
+                        <NativeSelectOption value="soften">{t("create.soften")}</NativeSelectOption>
+                        <NativeSelectOption value="mark">{t("create.mark")}</NativeSelectOption>
+                        <NativeSelectOption value="delete">{t("create.delete")}</NativeSelectOption>
+                      </NativeSelect>
+                    </DialogRow>
+                    <DialogRow icon={Globe} label={t("create.bilingualSubtitles")}>
+                      <Switch name="bilingualSubtitles" defaultChecked={getNested(settings, "task.translation.bilingualSubtitles", false)} />
+                    </DialogRow>
+                    <DialogRow icon={SlidersHorizontal} label={t("create.styleConstraints")}>
+                      <Input name="styleConstraints" defaultValue={listValue(getNested<JsonValue | undefined>(settings, "task.translation.styleConstraints", undefined), ["自然口语", "本土化表达"])} placeholder={styleConstraintOptions.join("，")} />
+                    </DialogRow>
                   <div className="rounded-lg border bg-muted/20 px-3">
                     <button
                       type="button"
                       className="flex w-full items-center justify-between py-3 font-medium text-sm"
                       onClick={() => setPromptPanelOpen((open) => !open)}
                     >
-                      <span>高级提示词</span>
+                      <span>{t("create.advancedPrompts")}</span>
                       <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", promptPanelOpen && "rotate-180")} />
                     </button>
                     {promptPanelOpen && (
-                      <div className="grid gap-3 pb-3 sm:grid-cols-2">
-                        <PromptField name="promptSubtitle" label="字幕翻译额外提示词" defaultValue={getNested(settings, "task.translation.prompts.subtitle", "")} />
-                        <PromptField name="promptComment" label="评论翻译额外提示词" defaultValue={getNested(settings, "task.translation.prompts.comment", "")} />
-                        <PromptField name="promptTitle" label="标题生成额外提示词" defaultValue={getNested(settings, "task.translation.prompts.title", "")} />
-                        <PromptField name="promptDescription" label="描述生成额外提示词" defaultValue={getNested(settings, "task.translation.prompts.description", "")} />
-                        <PromptField name="promptTags" label="标签/话题生成额外提示词" defaultValue={getNested(settings, "task.translation.prompts.tags", "")} />
+                      <div className="grid gap-3 pb-3">
+                        <PromptField name="promptSubtitle" label={t("create.subtitlePrompt")} defaultValue={getNested(settings, "task.translation.prompts.subtitle", "")} />
+                        <PromptField name="promptComment" label={t("create.commentPrompt")} defaultValue={getNested(settings, "task.translation.prompts.comment", "")} />
                       </div>
                     )}
                   </div>
-                </div>
-              </SettingsAccordionItem>
-
-              <SettingsAccordionItem value="cover" title="封面与文案" description="封面模板、封面图来源和文案来源。" icon={Layers} compact>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <FieldControl label="封面模板">
-                    <NativeSelect name="coverTemplate" defaultValue={getNested(settings, "task.coverAndCopy.template", DEFAULT_COVER_TEMPLATE)}>
-                      {COVER_TEMPLATE_IDS.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}
-                    </NativeSelect>
-                  </FieldControl>
-                  <FieldControl label="封面图" help="固定帧使用某一帧画面；AI 选帧抽取多帧交给 AI 选择。">
-                    <NativeSelect name="coverImageMode" defaultValue={getNested(settings, "task.coverAndCopy.imageMode", "ai")}>
-                      <NativeSelectOption value="fixed">固定帧</NativeSelectOption>
-                      <NativeSelectOption value="ai">AI 选帧</NativeSelectOption>
-                    </NativeSelect>
-                  </FieldControl>
-                  <FieldControl label="封面文案" help="无文案则只用画面；固定/AI 文案在设置中配置。">
-                    <NativeSelect name="coverCopyMode" defaultValue={getNested(settings, "task.coverAndCopy.copyMode", "ai")}>
-                      <NativeSelectOption value="none">无文案</NativeSelectOption>
-                      <NativeSelectOption value="fixed">固定文案</NativeSelectOption>
-                      <NativeSelectOption value="ai">AI 文案</NativeSelectOption>
-                    </NativeSelect>
-                  </FieldControl>
                 </div>
               </SettingsAccordionItem>
             </Accordion>
           </div>
 
           <DialogFooter className="!mx-0 !mb-0 !rounded-none !bg-background/95 !px-5 !py-3.5 shrink-0 border-t">
-            <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(false)}>取消</Button>
+            <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(false)}>{t("actions.cancel")}</Button>
             <Button disabled={busy === "create"} type="submit">
               {busy === "create" ? <Loader2 className="animate-spin" /> : <Plus />}
-              创建并运行
+              {t("create.createAndRun")}
             </Button>
           </DialogFooter>
         </form>
@@ -1089,7 +1056,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
           <SettingsPane active={activeSettings} id="download">
             <div className="rounded-lg border bg-card px-4 py-1">
               <PathField name="task.storage.taskDataDir" label="任务数据缓存位置" help="每个任务的全部中间数据（源视频、字幕、评论、规范化与翻译产物等）都会按任务存放在这里；渲染成品另由「渲染输出位置」管理。" defaultValue={getNested(settings, "task.storage.taskDataDir", "")} onChanged={() => { if (formRef.current) scheduleSave(formRef.current, 300); }} />
-              <SelectField name="task.download.videoQuality" label="默认视频下载分辨率" help="默认期望下载的分辨率。平台不提供时自动向下兼容更低分辨率。" defaultValue={getNested(settings, "task.download.videoQuality", "auto")} options={[["auto", "自动"], ["best", "最高清"], ["8k", "8K"], ["4k", "4K"], ["2k", "2K"], ["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]]} optionHelp={{ auto: "由 yt-dlp 自动选择最合适的格式", best: "下载平台提供的最高分辨率（可能超过 8K）", "8k": "目标 8K（4320p），不存在则向下兼容更低分辨率", "4k": "目标 4K（2160p），不存在则向下兼容更低分辨率", "2k": "目标 2K（1440p），不存在则向下兼容更低分辨率", "1080p": "目标 1080p，不存在则向下兼容更低分辨率", "720p": "目标 720p，不存在则向下兼容更低分辨率", "480p": "目标 480p，不存在则向下兼容更低分辨率" }} />
+              <SelectField name="task.download.videoQuality" label="默认视频下载分辨率" help="默认期望下载的分辨率。平台不提供时自动向下兼容更低分辨率。" defaultValue={normalizedResolutionOption(getNested(settings, "task.download.videoQuality", "auto"))} options={resolutionOptions} optionHelp={resolutionOptionHelp} />
               <LabelInput label="每条评论秒数" help="例如视频 60 秒、每条评论 2 秒，目标约 30 条。" name="task.download.commentSeconds" type="number" min={0.5} step={0.5} defaultValue={getNested(settings, "task.download.commentSeconds", 2)} className="w-20" />
               <LabelInput label="最大评论数" help="防止超长视频下载过多评论。" name="task.download.maxComments" type="number" min={1} max={5000} defaultValue={getNested(settings, "task.download.maxComments", 800)} className="w-20" />
               <LabelInput label="下载重试次数" name="task.download.retryCount" type="number" min={0} max={10} defaultValue={getNested(settings, "task.download.retryCount", 2)} className="w-20" />
@@ -1100,7 +1067,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
           <SettingsPane active={activeSettings} id="prepare">
             <div className="rounded-lg border bg-card px-4 py-1">
               <SelectField name="task.prepare.outputAspect" label="默认输出画幅" help="短视频默认建议竖屏；横屏源视频会按适配方式处理。" defaultValue={getNested(settings, "task.prepare.outputAspect", "portrait")} options={[["portrait", "竖屏 9:16"], ["landscape", "横屏 16:9"], ["source", "保持原视频"]]} optionHelp={{ portrait: "输出 9:16 竖屏，适合短视频平台", landscape: "输出 16:9 横屏，适合 YouTube 等平台", source: "保持源视频原始比例，不做任何裁切" }} selectClassName="w-36" />
-              <SelectField name="task.prepare.outputResolution" label="默认输出分辨率" help="最终渲染目标分辨率，选项与下载分辨率一致。" defaultValue={getNested(settings, "task.prepare.outputResolution", "auto")} options={[["auto", "自动"], ["best", "最高清"], ["8k", "8K"], ["4k", "4K"], ["2k", "2K"], ["1080p", "1080p"], ["720p", "720p"], ["480p", "480p"]]} optionHelp={{ auto: "跟随下载分辨率，不做额外缩放", best: "输出可用的最高分辨率", "8k": "目标 8K（4320p）", "4k": "目标 4K（2160p）", "2k": "目标 2K（1440p）", "1080p": "目标 1080p", "720p": "目标 720p", "480p": "目标 480p" }} selectClassName="w-36" />
+              <SelectField name="task.prepare.outputResolution" label="默认输出分辨率" help="最终渲染目标分辨率，选项与下载分辨率一致。" defaultValue={normalizedResolutionOption(getNested(settings, "task.prepare.outputResolution", "auto"))} options={resolutionOptions} optionHelp={resolutionOptionHelp} selectClassName="w-36" />
               <SelectField name="task.prepare.fitMode" label="画面适配方式" help="用于处理源视频比例和输出比例不一致的情况。" defaultValue={getNested(settings, "task.prepare.fitMode", "smart-crop")} options={[["smart-crop", "智能裁剪"], ["blur-background", "模糊背景补边"], ["keep-bars", "黑边保留"], ["center-crop", "居中裁剪"]]} optionHelp={{ "smart-crop": "AI 检测主体位置，智能居中裁剪，尽量保留画面重点", "blur-background": "将源视频缩放后居中，两侧用模糊背景填充，无内容损失", "keep-bars": "保持比例缩放，用黑边填充，内容完整但观感较差", "center-crop": "严格居中裁剪，不做智能识别，速度更快" }} selectClassName="w-36" />
               <SelectField name="task.prepare.subtitleCleanup" label="字幕整理" help="自动合并可以减少字幕过碎导致的闪烁。" defaultValue={getNested(settings, "task.prepare.subtitleCleanup", "merge-short")} options={[["merge-short", "自动合并短句"], ["keep", "保持原样"]]} optionHelp={{ "merge-short": "自动合并过短或间隔过近的字幕段，减少屏幕闪烁", keep: "保持字幕原始分段，适合有精确时间轴要求的场景" }} selectClassName="w-36" />
             </div>
@@ -1436,7 +1403,7 @@ function CoverCopyPane({ settings, onChanged }: { settings: SettingsShape | null
   function onTemplateChange(value: string) {
     setTemplate(value);
     setAiPrompt(coverTemplateAiPrompt(value));
-    onChanged?.();
+    window.setTimeout(() => onChanged?.(), 0);
   }
 
   return (
@@ -1593,9 +1560,9 @@ function DialogRow({ icon: Icon, label, children }: {
 }) {
   return (
     <div className="flex items-center gap-4 py-2.5">
-      <div className="flex w-28 shrink-0 items-center gap-2 text-muted-foreground text-sm">
+      <div className="flex w-40 shrink-0 items-center gap-2 text-muted-foreground text-sm">
         <Icon className="size-4" />
-        <span>{label}</span>
+        <span className="whitespace-nowrap">{label}</span>
       </div>
       <span className="shrink-0 select-none text-muted-foreground/40 text-sm">:</span>
       <div className="flex min-w-0 flex-1 items-center gap-2">

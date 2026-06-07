@@ -309,6 +309,7 @@ export interface CoverOptions {
   copyMode: "none" | "fixed" | "ai";
   fixedCopy: Record<string, string | undefined>;
   aiPrompt: string;
+  outputDir: string;
 }
 
 const AI_FRAME_COUNT = 5;
@@ -406,7 +407,7 @@ export async function generateCover(
     `[Cover] template=${options.template} copyMode=${copyMode} lines=${texts.length}`,
   );
 
-  const outDir = path.join(process.cwd(), "out");
+  const outDir = options.outputDir;
   fs.mkdirSync(outDir, { recursive: true });
 
   const landscapePath = path.join(outDir, `${job.id}-cover.jpg`);

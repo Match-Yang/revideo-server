@@ -29,12 +29,19 @@ export interface SourceProbeResult {
   raw?: Record<string, unknown>;
 }
 
+export interface DownloadConfig {
+  videoQuality: "auto" | "best" | "8k" | "4k" | "2k" | "1080p" | "720p" | "480p";
+  retryCount: number;
+  timeoutSec: number;
+}
+
 export interface DownloadRequest {
   url: string;
   outputDir: string;
   options: JobOptions;
   formatId?: string;
   signal?: AbortSignal;
+  download?: DownloadConfig;
 }
 
 export interface SourceAssetManifest {

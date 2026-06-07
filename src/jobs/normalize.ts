@@ -1,6 +1,10 @@
 import fs from "fs";
 import path from "path";
 import type { RevideoJob } from "./types";
+import { loadSettings, type RevideoSettings } from "../settings";
+import { normalizeShortWebVttCues, normalizeYouTubeRollingWebVtt, serializeWebVttCues } from "../subtitles/normalize";
+
+const COMMENT_CLEANUP = ["dedupe", "drop-empty"] as const;
 
 export interface NormalizedAssets {
   mediaPath?: string;
@@ -37,7 +41,50 @@ function detectSubtitles(files: string[]): string[] {
   return files.filter((file) => /\.(vtt|srt)$/i.test(file));
 }
 
+function getJobSettings(job: RevideoJob): RevideoSettings {
+  const snapshot = job.settingsSnapshot as RevideoSettings | undefined;
+  if (snapshot?.task?.prepare) return snapshot;
+  return loadSettings();
+}
+
+function normalizeCommentList(comments: unknown[]): unknown[] {
+  let next = comments.filter((comment) => {
+    const text = typeof (comment as { text?: unknown }).text === "string" ? (comment as { text: string }).text.trim() : "";
+    return text.length > 0;
+  });
+
+  if (COMMENT_CLEANUP.includes("dedupe")) {
+    const seen = new Set<string>();
+    next = next.filter((comment) => {
+      const item = comment as { text?: unknown; author_id?: unknown; author?: unknown };
+      const key = `${String(item.author_id || item.author || "")}\u0000${String(item.text || "").trim()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  return next;
+}
+
+function normalizeSubtitleFile(source: string, target: string, cleanup: RevideoSettings["task"]["prepare"]["subtitleCleanup"]): void {
+  if (cleanup !== "merge-short" || !/\.vtt$/i.test(source)) {
+    copyIfDifferent(source, target);
+    return;
+  }
+  const content = fs.readFileSync(source, "utf-8");
+  const cues = normalizeYouTubeRollingWebVtt(content) || normalizeShortWebVttCues(content);
+  if (!cues) {
+    copyIfDifferent(source, target);
+    return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, serializeWebVttCues(cues));
+}
+
 export function normalizeJobAssets(job: RevideoJob): NormalizedAssets {
+  const settings = getJobSettings(job);
+  const prepare = settings.task.prepare;
   const files = walkFiles(job.artifacts.sourceDir);
   const mediaPath = detectMedia(files);
   const infoPath = detectInfo(files);
@@ -56,6 +103,7 @@ export function normalizeJobAssets(job: RevideoJob): NormalizedAssets {
     copyIfDifferent(infoPath, sourceInfoPath);
 
     if (Array.isArray(rawInfo.comments)) {
+      const comments = normalizeCommentList(rawInfo.comments);
       rawCommentsPath = path.join(job.artifacts.sourceDir, "comments", "raw.json");
       normalizedCommentsPath = path.join(job.artifacts.sourceDir, "comments", "normalized.json");
       fs.mkdirSync(path.dirname(rawCommentsPath), { recursive: true });
@@ -67,7 +115,7 @@ export function normalizeJobAssets(job: RevideoJob): NormalizedAssets {
             id: rawInfo.id,
             title: rawInfo.title,
             duration: durationSec,
-            comments: rawInfo.comments,
+            comments,
           },
           null,
           2
@@ -78,7 +126,7 @@ export function normalizeJobAssets(job: RevideoJob): NormalizedAssets {
 
   const canonicalSubtitlePaths = subtitlePaths.map((subtitlePath) => {
     const target = path.join(job.artifacts.sourceDir, "subtitles", path.basename(subtitlePath));
-    copyIfDifferent(subtitlePath, target);
+    normalizeSubtitleFile(subtitlePath, target, prepare.subtitleCleanup);
     return target;
   });
 

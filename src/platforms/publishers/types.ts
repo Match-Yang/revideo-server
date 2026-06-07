@@ -11,6 +11,6 @@ export interface PublisherAdapter {
   platform: TargetPlatform;
   implemented: boolean;
   requiresBrowser: boolean;
-  preflight(job: RevideoJob): Promise<{ ok: boolean; message: string; data?: unknown }>;
+  preflight(job: RevideoJob, options?: { login?: boolean }): Promise<{ ok: boolean; message: string; data?: unknown }>;
   publish(job: RevideoJob, force?: boolean): Promise<PublishAdapterResult>;
 }

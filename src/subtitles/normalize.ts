@@ -224,3 +224,34 @@ export function normalizeYouTubeRollingWebVtt(content: string): NormalizedSubtit
   const cues = timedFragmentsToNormalCues(fragments);
   return cues.length > 0 ? cues : undefined;
 }
+
+export function normalizeShortWebVttCues(content: string): NormalizedSubtitleCue[] | undefined {
+  const blocks = parseWebVttBlocks(content);
+  if (blocks.length === 0) return undefined;
+  const cues = blocks
+    .map((block, index) => ({
+      id: `cue-${index}`,
+      start: block.start,
+      end: block.end,
+      text: cleanSubtitleText(block.textLines.join("\n")),
+    }))
+    .filter((cue) => cue.text);
+  const merged = mergeTinyCues(cues);
+  return merged.length > 0 ? merged : undefined;
+}
+
+function formatSubtitleTimestamp(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = Math.floor(safe % 60);
+  const millis = Math.round((safe - Math.floor(safe)) * 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+export function serializeWebVttCues(cues: NormalizedSubtitleCue[], language = "captions"): string {
+  const blocks = cues.map((cue) =>
+    `${formatSubtitleTimestamp(cue.start)} --> ${formatSubtitleTimestamp(cue.end)}\n${cue.text}`
+  );
+  return `WEBVTT\nKind: captions\nLanguage: ${language}\n\n${blocks.join("\n\n")}\n`;
+}

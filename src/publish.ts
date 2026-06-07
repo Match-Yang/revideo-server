@@ -6,10 +6,12 @@ import puppeteer, { type Browser, type Page } from "puppeteer";
 
 interface PublishOptions {
   videoPath: string;
+  coverPath?: string;
   title: string;
   description: string;
   tags?: string[];
   category?: string; // Bilibili分区: 汽车, 科技数码, vlog, 美食, etc.
+  declaration?: string; // Bilibili创作声明: 内容为转载, 内容无需标注, etc.
 }
 
 interface PublishProgress {
@@ -226,7 +228,7 @@ async function publishBilibili(
   cdpEndpoint: string | undefined,
   onProgress: (p: PublishProgress) => void
 ): Promise<Record<string, unknown>> {
-  const { videoPath, title, description, tags = [] } = options;
+  const { videoPath, coverPath: requestedCoverPath, title, description, tags = [] } = options;
 
   onProgress({ stage: "connecting", percent: 0, message: "正在连接B站..." });
   const browser = await connectBrowser(cdpEndpoint);
@@ -386,16 +388,18 @@ async function publishBilibili(
       });
       if (declarationSelected === 'clicked') {
         await sleep(1000);
-        // Select the first option "内容无需标注"
-        await page.evaluate(() => {
+        // Select the matching declaration option, or fall back to first option
+        await page.evaluate((preferredDeclaration: string) => {
           const options = Array.from(document.querySelectorAll('.bcc-option'))
-            .filter(el => (el as HTMLElement).offsetHeight > 0);
-          if (options.length > 0) {
-            (options[0] as HTMLElement).click();
-          }
-        });
+            .filter(el => (el as HTMLElement).offsetHeight > 0) as HTMLElement[];
+          if (options.length === 0) return;
+          const match = preferredDeclaration
+            ? options.find(el => el.textContent?.includes(preferredDeclaration))
+            : undefined;
+          (match || options[0]).click();
+        }, options.declaration || "");
         await sleep(500);
-        console.log('[Declaration] 创作声明 set to first option');
+        console.log('[Declaration] 创作声明 set');
       } else if (declarationSelected) {
         console.log('[Declaration] Already set');
       } else {
@@ -482,7 +486,10 @@ async function publishBilibili(
       const { execSync } = require('child_process');
       const path = require('path');
       const fs = require('fs');
-      let coverPath = videoPath.replace(/\.mp4$/, '-cover.jpg');
+      let coverPath =
+        requestedCoverPath && fs.existsSync(requestedCoverPath)
+          ? requestedCoverPath
+          : videoPath.replace(/\.mp4$/, '-cover.jpg');
       // Also try removing -cut suffix (e.g. video-cut.mp4 → video-cover.jpg)
       if (!fs.existsSync(coverPath)) {
         const baseCover = videoPath.replace(/-cut\.mp4$/, '-cover.jpg');
@@ -813,7 +820,8 @@ async function publishDouyin(
 
 export interface PublishRequest {
   videoPath: string;
-  bilibili?: { title: string; description: string; tags?: string[]; category?: string };
+  coverPath?: string;
+  bilibili?: { title: string; description: string; tags?: string[]; category?: string; declaration?: string };
   douyin?: { title: string; description: string };
   cdpEndpoint?: string;
 }
@@ -849,10 +857,12 @@ export async function publish(
       if (platform === "bilibili") {
         const opts: PublishOptions = {
           videoPath,
+          coverPath: req.coverPath,
           title: req.bilibili?.title || "",
           description: req.bilibili?.description || "",
           tags: req.bilibili?.tags,
           category: req.bilibili?.category,
+          declaration: req.bilibili?.declaration,
         };
         const result = await publishBilibili(opts, cdpEndpoint, (p) =>
           onProgress({
@@ -864,6 +874,7 @@ export async function publish(
       } else if (platform === "douyin") {
         const opts: PublishOptions = {
           videoPath,
+          coverPath: req.coverPath,
           title: req.douyin?.title || "",
           description: req.douyin?.description || "",
         };

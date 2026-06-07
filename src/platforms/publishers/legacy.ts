@@ -16,6 +16,12 @@ function requireVideo(job: RevideoJob): string {
   return job.artifacts.outputVideo;
 }
 
+function getCoverPath(job: RevideoJob): string | undefined {
+  return job.artifacts.coverImage && fs.existsSync(job.artifacts.coverImage)
+    ? job.artifacts.coverImage
+    : undefined;
+}
+
 function writeResult(job: RevideoJob, platform: TargetPlatform, result: unknown): void {
   fs.mkdirSync(job.artifacts.publishDir, { recursive: true });
   fs.writeFileSync(
@@ -28,15 +34,18 @@ function buildPublishRequest(job: RevideoJob, platform: TargetPlatform): Publish
   const target = getTarget(job, platform);
   const draft = target?.draft || {};
   const videoPath = requireVideo(job);
+  const coverPath = getCoverPath(job);
 
   if (platform === "bilibili") {
     return {
       videoPath,
+      coverPath,
       bilibili: {
         title: String(draft.title || ""),
         description: String(draft.description || ""),
         tags: Array.isArray(draft.tags) ? draft.tags.map(String) : [],
         category: typeof draft.category === "string" ? draft.category : undefined,
+        declaration: typeof draft.declaration === "string" ? draft.declaration : undefined,
       },
     };
   }
@@ -44,6 +53,7 @@ function buildPublishRequest(job: RevideoJob, platform: TargetPlatform): Publish
   if (platform === "douyin") {
     return {
       videoPath,
+      coverPath,
       douyin: {
         title: String(draft.title || ""),
         description: String(draft.description || ""),
@@ -60,7 +70,10 @@ function createLegacyPublisher(platform: "bilibili" | "douyin", implemented: boo
     implemented,
     requiresBrowser: true,
 
-    async preflight() {
+    async preflight(_job, options) {
+      if (options?.login === false) {
+        return { ok: true, message: "Login check skipped by settings" };
+      }
       const browser = await startBrowser();
       if (!browser.running) {
         return { ok: false, message: browser.error || "Browser is not running", data: browser };

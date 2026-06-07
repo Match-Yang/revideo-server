@@ -78,6 +78,10 @@ export interface JobOptions {
   targetCommentCount?: number;
   renderComments?: boolean;
   bilingualSubtitles?: boolean;
+  subtitleMode?: "auto" | "always" | "off" | string;
+  commentMode?: "auto" | "always" | "off" | string;
+  sensitiveContent?: "preserve" | "soften" | "mark" | "delete" | string;
+  styleConstraints?: string[];
   translateProvider?: string;
   outputAspect?: "auto" | "portrait" | "landscape" | "source" | string;
   outputResolution?: "auto" | "1080x1920" | "720x1280" | "1920x1080" | string;
@@ -85,13 +89,7 @@ export interface JobOptions {
   promptOverrides?: {
     subtitle?: string;
     comment?: string;
-    title?: string;
-    description?: string;
-    tags?: string;
   };
-  coverTemplate?: string;
-  coverImageMode?: "fixed" | "ai" | string;
-  coverCopyMode?: "none" | "fixed" | "ai" | string;
 }
 
 export interface JobArtifacts {

@@ -47,6 +47,7 @@ import {
 } from "./translate/openai-compatible";
 import { getSystemHealth } from "./health";
 import { calculateTargetCommentCount, defaultRenderDir, loadSettings, saveSettings } from "./settings";
+import type { RevideoSettings } from "./settings";
 import {
   createTask,
   getAllTasks,
@@ -60,6 +61,45 @@ import {
   syncRenderStatus,
 } from "./task-manager";
 import type { AddTaskRequest, TaskFilter } from "./types";
+
+const DEFAULT_SOURCE_PLATFORM = "auto";
+const DUPLICATE_JOB_STRATEGY = "block";
+const DEFAULT_PUBLISH_ACTION = "publish";
+
+function taskSettingsSnapshot(settings: RevideoSettings, options?: CreateJobRequest["options"]): RevideoSettings {
+  const translation = {
+    ...settings.task.translation,
+    prompts: { ...settings.task.translation.prompts },
+  };
+  if (options?.subtitleMode === "auto" || options?.subtitleMode === "always" || options?.subtitleMode === "off") {
+    translation.subtitleMode = options.subtitleMode;
+  }
+  if (options?.commentMode === "auto" || options?.commentMode === "always" || options?.commentMode === "off") {
+    translation.commentMode = options.commentMode;
+  }
+  if (
+    options?.sensitiveContent === "preserve" ||
+    options?.sensitiveContent === "soften" ||
+    options?.sensitiveContent === "mark" ||
+    options?.sensitiveContent === "delete"
+  ) {
+    translation.sensitiveContent = options.sensitiveContent;
+  }
+  if (Array.isArray(options?.styleConstraints)) {
+    translation.styleConstraints = options.styleConstraints;
+  }
+  if (options?.promptOverrides) {
+    translation.prompts.subtitle = options.promptOverrides.subtitle ?? translation.prompts.subtitle;
+    translation.prompts.comment = options.promptOverrides.comment ?? translation.prompts.comment;
+  }
+  return {
+    ...settings,
+    task: {
+      ...settings.task,
+      translation,
+    },
+  };
+}
 
 let currentRender: { name: string; progress: any; abortController?: AbortController; taskId?: string } | null = null;
 
@@ -152,6 +192,12 @@ function markCompletedIfAllTargetsPublished(jobId: string): void {
   }
 }
 
+function getJobSettings(job: NonNullable<ReturnType<typeof loadJob>>): RevideoSettings {
+  const snapshot = job.settingsSnapshot as RevideoSettings | undefined;
+  if (snapshot && snapshot.task && snapshot.task.download) return snapshot;
+  return loadSettings();
+}
+
 function getRenderOutputDir(job: NonNullable<ReturnType<typeof loadJob>>): string {
   const settings = (job.settingsSnapshot || {}) as { task?: { render?: { outputDir?: string } } };
   return settings.task?.render?.outputDir || defaultRenderDir();
@@ -159,7 +205,9 @@ function getRenderOutputDir(job: NonNullable<ReturnType<typeof loadJob>>): strin
 
 function existingRenderResult(job: NonNullable<ReturnType<typeof loadJob>>) {
   const renderDir = getRenderOutputDir(job);
-  const outputPath = path.join(renderDir, `${job.id}.mp4`);
+  const settings = getJobSettings(job);
+  const outputFormat = settings.task?.render?.outputFormat === "mov" ? "mov" : "mp4";
+  const outputPath = path.join(renderDir, `${job.id}.${outputFormat}`);
   if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) return null;
   const coverPath = path.join(renderDir, `${job.id}-cover.jpg`);
   const normalized = job.source.metadata?.normalizedAssets as { durationSec?: number } | undefined;
@@ -185,7 +233,7 @@ function snapshotQueue() {
 }
 
 function shouldPublishForAction(action?: string): boolean {
-  return (action || loadSettings().task.publish.defaultAction) === "publish";
+  return (action || DEFAULT_PUBLISH_ACTION) === "publish";
 }
 
 function defaultRunSteps(publishAction?: string): string[] {
@@ -290,7 +338,9 @@ function recoverInterruptedJobRuns(): void {
         if (renderResult) {
           const latest = loadJob(job.id) || job;
           latest.artifacts.outputVideo = renderResult.outputPath;
-          latest.artifacts.coverImage = renderResult.coverPath;
+          if (!latest.artifacts.coverImage && renderResult.coverPath) {
+            latest.artifacts.coverImage = renderResult.coverPath;
+          }
           saveJob(latest);
           setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
           appendJobEvent({
@@ -465,6 +515,7 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         options: job.options,
         formatId: options.formatId,
         signal: options.signal,
+        download: getJobSettings(job).task.download,
       });
       const latest = loadJob(job.id) || job;
       latest.source.metadata = { ...latest.source.metadata, assets: results.download };
@@ -541,21 +592,15 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         message: "Cover generation started",
       });
       try {
-        const cc = loadSettings().task.coverAndCopy;
-        const opt = latest.options || {};
-        const imageMode = opt.coverImageMode === "fixed" || opt.coverImageMode === "ai"
-          ? opt.coverImageMode
-          : cc.imageMode;
-        const copyMode = opt.coverCopyMode === "none" || opt.coverCopyMode === "fixed" || opt.coverCopyMode === "ai"
-          ? opt.coverCopyMode
-          : cc.copyMode;
+        const cc = getJobSettings(latest).task.coverAndCopy;
         const coverResult = await generateCover(latest, {
-          template: opt.coverTemplate || cc.template,
-          imageMode,
-          copyMode,
+          template: cc.template,
+          imageMode: cc.imageMode,
+          copyMode: cc.copyMode,
           fixedFrameIndex: cc.fixedFrameIndex,
           fixedCopy: cc.fixedCopy,
           aiPrompt: cc.aiPrompt,
+          outputDir: getRenderOutputDir(latest),
         });
         const next = loadJob(job.id) || latest;
         next.artifacts.coverImage = coverResult.coverLandscape;
@@ -591,7 +636,9 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
       const reusableRender = options.force ? null : existingRenderResult(latest);
       if (reusableRender) {
         latest.artifacts.outputVideo = reusableRender.outputPath;
-        latest.artifacts.coverImage = reusableRender.coverPath;
+        if (!latest.artifacts.coverImage && reusableRender.coverPath) {
+          latest.artifacts.coverImage = reusableRender.coverPath;
+        }
         saveJob(latest);
         results.render = reusableRender;
         setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
@@ -627,7 +674,9 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         results.render = renderResult;
         const next = loadJob(job.id) || latest;
         next.artifacts.outputVideo = renderResult.outputPath;
-        next.artifacts.coverImage = renderResult.coverPath;
+        if (!next.artifacts.coverImage && renderResult.coverPath) {
+          next.artifacts.coverImage = renderResult.coverPath;
+        }
         saveJob(next);
         setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
         appendJobEvent({
@@ -688,9 +737,18 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
       setJobStep(job.id, "publishing-targets", "running", { percent: 0 });
       const latest = loadJob(job.id) || job;
       const publishResults: Record<string, unknown> = {};
+      const latestSettings = (latest.settingsSnapshot || loadSettings()) as RevideoSettings;
+      const platformConfigs = latestSettings.task.publish.platformConfigs as Record<string, { defaultAction?: string }>;
       for (const target of latest.targets) {
         if (target.status === "published" && !options.force) {
           publishResults[target.platform] = { skipped: true, reason: "already published" };
+          continue;
+        }
+        // Check per-platform action (falls back to global publishAction)
+        const platformAction = platformConfigs[target.platform]?.defaultAction;
+        const effectiveAction = platformAction || latest.options.publishAction || DEFAULT_PUBLISH_ACTION;
+        if (effectiveAction === "draft") {
+          publishResults[target.platform] = { skipped: true, reason: "platform action is draft" };
           continue;
         }
         target.status = "publishing";
@@ -875,7 +933,8 @@ async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
     throw new Error("source.url is required");
   }
 
-  const adapter = resolveSourceAdapter(body.source.url, body.source.platform || "auto");
+  const settings = loadSettings();
+  const adapter = resolveSourceAdapter(body.source.url, body.source.platform || DEFAULT_SOURCE_PLATFORM);
   if (!adapter) {
     throw new Error(`No source adapter matched url: ${body.source.url}`);
   }
@@ -885,17 +944,16 @@ async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
     throw err;
   }
 
-  const settings = loadSettings();
   const probe = await adapter.probe(body.source.url);
   const jobId = createJobId(probe.platform, probe.contentId);
   const existingJob = loadJob(jobId);
-  if (existingJob && !force) {
+  if (existingJob && !force && DUPLICATE_JOB_STRATEGY === "block") {
     const err = new Error(`任务已存在: ${existingJob.source?.metadata?.title || jobId}。使用 force=true 覆盖。`);
     err.name = "JobConflict";
     throw err;
   }
   cancelJobRunsForJob(jobId, "Existing run cancelled before recreating job");
-  const repeatTimes = Math.min(10, Math.max(1, Number(body.options?.repeatTimes || 1)));
+  const repeatTimes = Math.min(10, Math.max(1, Number(body.options?.repeatTimes ?? settings.task.render.repeatTimes ?? 1)));
   const renderComments = body.options?.renderComments ?? settings.task.render.renderComments !== false;
   const targetCommentCount = renderComments
     ? calculateTargetCommentCount(probe.durationSec, repeatTimes, settings)
@@ -932,13 +990,15 @@ async function createJobFromRequest(body: CreateJobRequest, force?: boolean) {
     ...job.options,
     targetLanguage: body.options?.targetLanguage || settings.task.translation.targetLanguage,
     downloadQuality: body.options?.downloadQuality || job.options.downloadQuality || settings.task.download.videoQuality || "auto",
-    publishAction: body.options?.publishAction || settings.task.publish.defaultAction,
+    publishAction: body.options?.publishAction || DEFAULT_PUBLISH_ACTION,
+    outputAspect: body.options?.outputAspect || settings.task.prepare.outputAspect,
+    outputResolution: body.options?.outputResolution || settings.task.prepare.outputResolution,
     ...body.options,
     repeatTimes,
     targetCommentCount,
     renderComments,
   };
-  job.settingsSnapshot = settings;
+  job.settingsSnapshot = taskSettingsSnapshot(settings, body.options);
   saveJob(job);
   setJobStep(job.id, "probing-source", "completed", { percent: 100 });
   appendJobEvent({
@@ -1254,6 +1314,7 @@ app.post("/api/jobs/:jobId/download", async (req, res) => {
       outputDir: job.artifacts.sourceDir,
       options: job.options,
       formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
+      download: getJobSettings(job).task.download,
     });
 
     const latest = loadJob(job.id) || job;
@@ -1360,7 +1421,9 @@ app.post("/api/jobs/:jobId/render", async (req, res) => {
       const result = await renderJob(job, handleProgress, abortController.signal);
       const latest = loadJob(job.id) || job;
       latest.artifacts.outputVideo = result.outputPath;
-      latest.artifacts.coverImage = result.coverPath;
+      if (!latest.artifacts.coverImage && result.coverPath) {
+        latest.artifacts.coverImage = result.coverPath;
+      }
       saveJob(latest);
       setJobStep(job.id, "rendering-video", "completed", { percent: 100 });
       appendJobEvent({
