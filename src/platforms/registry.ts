@@ -1,17 +1,11 @@
 import type { SourceAdapter } from "./types";
 import { youtubeSourceAdapter } from "./sources/youtube";
+import { tiktokSourceAdapter } from "./sources/tiktok";
 import { listPublisherAdapters } from "./publishers/registry";
 
 const sourceAdapters: SourceAdapter[] = [
   youtubeSourceAdapter,
-  {
-    platform: "tiktok",
-    implemented: false,
-    matchUrl: (url) => /tiktok\.com/i.test(url),
-    probe: async () => {
-      throw new Error("TikTok source adapter is planned but not implemented yet");
-    },
-  },
+  tiktokSourceAdapter,
   {
     platform: "bilibili",
     implemented: false,
