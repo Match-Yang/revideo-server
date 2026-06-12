@@ -160,7 +160,6 @@ jobs:
           generate_release_notes: true
 
       - name: Upload to Gitee Releases
-        if: vars.GITEE_TOKEN != ''
         shell: bash
         env:
           GITEE_REPO: agflow/revideo
