@@ -1,32 +1,76 @@
 # Revideo Server
 
-Video rendering, workflow, and publishing service built on FFmpeg.
+Video rendering, translation, and cross-platform republishing service built on FFmpeg.
 
-The project is being migrated from a YouTube-to-Bilibili helper into a platform-neutral reposting pipeline:
+Source platform → canonical job assets → processing workflow → target platforms
 
-```text
-source platform -> canonical job assets -> processing workflow -> target platforms
+## Quick Install
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://gitee.com/<owner>/revideo-server/raw/main/install.sh | bash
 ```
 
-See [docs/cross-platform-pipeline.md](docs/cross-platform-pipeline.md) for the target architecture.
+**Windows (PowerShell):**
 
-## Commands
+```powershell
+iex (irm https://gitee.com/<owner>/revideo-server/raw/main/install.ps1)
+```
 
-**Install Dependencies**
+This will automatically:
+- Install Node.js 22+, yt-dlp, ffmpeg/ffprobe (if missing)
+- Download the pre-built package for your platform
+- Register the server as a system service (auto-start on boot)
+- Start the server on port 3001
+
+After installation, open http://localhost:3001 to access the dashboard.
+
+**Uninstall:**
+
+```bash
+# Linux / macOS
+curl -fsSL https://gitee.com/<owner>/revideo-server/raw/main/install.sh | bash -s -- --uninstall
+
+# Windows
+iex (irm https://gitee.com/<owner>/revideo-server/raw/main/install.ps1); Install-Revideo -Uninstall
+```
+
+<details>
+<summary>Manual Installation</summary>
+
+**Prerequisites**
+
+- Node.js >= 22
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+- [ffmpeg](https://ffmpeg.org/) + ffprobe
+- Chrome or Chromium (for browser-based publishing, optional)
+
+**Steps**
 
 ```console
-npm i
+git clone https://github.com/Match-Yang/revideo-server.git
+cd revideo-server
+npm install
+npm run build
+cp .env.example .env   # then edit .env with your translation config
+npm start
 ```
 
-**Start API and management panel**
+Open http://localhost:3001.
+
+</details>
+
+## Development
 
 ```console
-npm run ui
+npm install
+npm run dev            # API on :3001 + dashboard dev server
+npm run build          # compile TypeScript → dist/
+npm run lint           # eslint + tsc
 ```
 
-Open `http://localhost:3001`.
-
-**Configure translation**
+## Configure Translation
 
 Copy `.env.example` to `.env`, then fill the provider settings. For Volcengine Ark:
 
@@ -38,15 +82,9 @@ VOLCENGINE_API_KEY=your-volcengine-ark-api-key
 TRANSLATE_THINKING_TYPE=disabled
 ```
 
-`TRANSLATE_MODEL` can be either a Volcengine Ark Model ID or an inference endpoint ID. `TRANSLATE_THINKING_TYPE=disabled` turns off Ark's thinking mode for translation calls. `ARK_API_KEY` is also supported if you prefer the variable name used in many Ark examples. Restart `npm run ui` after editing `.env`.
+`TRANSLATE_MODEL` can be either a Volcengine Ark Model ID or an inference endpoint ID. `TRANSLATE_THINKING_TYPE=disabled` turns off Ark's thinking mode for translation calls. `ARK_API_KEY` is also supported if you prefer the variable name used in many Ark examples. Restart the server after editing `.env`.
 
 Translation safety is handled as model review plus Chinese post-scan. Source text is not locally pre-scanned because comments and subtitles may be in any language, including normal Chinese comments.
-
-**Restart API and management panel**
-
-```console
-npm run restart:ui
-```
 
 ## APIs
 
@@ -63,3 +101,7 @@ New cross-platform job APIs include:
 - `GET /api/translate/providers`
 
 Legacy folder rendering APIs remain available for local task folders.
+
+## License
+
+MIT

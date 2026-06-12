@@ -5,6 +5,10 @@ node_modules/
 dist/
 build/
 
+# Release archives
+revideo-*.tar.gz
+revideo-*.zip
+
 # Public (runtime populated by render - contains source video, subtitles, comments)
 public/
 

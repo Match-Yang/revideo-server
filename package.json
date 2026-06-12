@@ -2,9 +2,11 @@
   "name": "revideo-server",
   "version": "1.0.0",
   "description": "Revideo Server",
-  "repository": {},
-  "license": "UNLICENSED",
-  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "main": "dist/server.js",
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
@@ -24,6 +26,8 @@
     "typescript-eslint": "^8.60.1"
   },
   "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
     "dev:restart": "scripts/dev.sh",
     "dev": "npx concurrently -n \"api,ui\" -c \"blue,green\" \"tsx src/server.ts\" \"npm --prefix dashboard run dev\"",
     "dashboard:install": "npm --prefix dashboard install",

@@ -775,7 +775,7 @@ async function publishDouyin(
     for (let attempt = 0; attempt < 5; attempt++) {
       await page.evaluate(() => {
         document.querySelectorAll("button").forEach((b) => {
-          if (b.textContent.trim() === "发布") {
+          if (b.textContent?.trim() === "发布") {
             (b as HTMLButtonElement).click();
           }
         });

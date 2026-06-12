@@ -11,7 +11,10 @@ export function resolveCommand(name: string): string {
           path.join(os.homedir(), ".local", "bin", "yt-dlp"),
           path.join(os.homedir(), "bin", "yt-dlp"),
         ]
-      : [process.env[`${name.toUpperCase()}_BIN`]];
+      : [
+          process.env[`${name.toUpperCase()}_BIN`],
+          path.join(os.homedir(), ".local", "bin", name),
+        ];
 
   const found = candidates.find((candidate): candidate is string =>
     Boolean(candidate && fs.existsSync(candidate))

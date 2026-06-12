@@ -51,7 +51,7 @@ if command -v launchctl >/dev/null 2>&1 && [[ "$(uname -s)" == "Darwin" ]]; then
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>cd '${PWD}' &amp;&amp; exec '${NODE_BIN}' --import tsx src/server.ts</string>
+    <string>cd '${PWD}' &amp;&amp; exec '${NODE_BIN}' dist/server.js</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -72,7 +72,7 @@ EOF
   launchctl bootstrap "gui/$(id -u)" "${PLIST}"
   launchctl kickstart -k "gui/$(id -u)/${LABEL}" >/dev/null 2>&1 || true
 else
-  nohup bash -lc "cd '$PWD' && exec '${NODE_BIN}' --import tsx src/server.ts" >"${LOG_FILE}" 2>&1 </dev/null &
+  nohup bash -lc "cd '$PWD' && exec '${NODE_BIN}' dist/server.js" >"${LOG_FILE}" 2>&1 </dev/null &
   echo "$!" >"${PID_FILE}"
 fi
 

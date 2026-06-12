@@ -3,7 +3,7 @@ import path from "path";
 import { execSync } from "child_process";
 import sharp from "sharp";
 import { getTranslateConfig } from "../translate/openai-compatible";
-import { buildCoverSvg, coverTemplateFields, isNoTemplate } from "../../dashboard/src/lib/cover-templates";
+import { buildCoverSvg, coverTemplateFields, isNoTemplate } from "../lib/cover-templates";
 import type { RevideoJob } from "./types";
 
 // ---------------------------------------------------------------------------
