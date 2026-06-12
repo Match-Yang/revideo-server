@@ -30,9 +30,6 @@ jobs:
           - os: macos-latest
             platform: darwin-arm64
             ext: tar.gz
-          - os: macos-13
-            platform: darwin-x64
-            ext: tar.gz
           - os: windows-latest
             platform: win-x64
             ext: zip
