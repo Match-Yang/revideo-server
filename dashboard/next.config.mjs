@@ -8,9 +8,7 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  turbopack: {
-    root: new URL(".", import.meta.url).pathname,
-  },
+  turbopack: {},
   reactCompiler: true,
   compiler: {
     removeConsole: !isDev,
