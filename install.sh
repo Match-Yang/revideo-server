@@ -320,13 +320,13 @@ get_latest_version() {
   # Try Gitee API first
   if [[ -n "$GITEE_REPO" ]]; then
     version="$(curl -fsSL "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/latest" 2>/dev/null \
-      | grep -oP '"tag_name"\s*:\s*"\K[^"]+' | head -1)" || true
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)" || true
   fi
 
   # Fallback to GitHub API
   if [[ -z "$version" ]]; then
     version="$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null \
-      | grep -oP '"tag_name"\s*:\s*"\K[^"]+' | head -1)" || true
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)" || true
   fi
 
   if [[ -z "$version" ]]; then
