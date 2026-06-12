@@ -1188,19 +1188,10 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
           </SettingsPane>
 
           <SettingsPane active={activeSettings} id="llm">
-            <SettingsSection title="服务模式" description="可以使用内置服务，也可以自己配置模型。">
-              <SelectField name="llm.serviceMode" label="服务模式" help="内置服务未来用于售卖；用户不需要填 API Key。" defaultValue={getNested(settings, "llm.serviceMode", "managed")} options={[["managed", "使用内置服务"], ["custom", "自己配置模型"]]} optionHelp={{ managed: "使用平台提供的内置服务，无需自己配置 API Key", custom: "自行配置模型和 API Key，完全掌控调用方式和费用" }} />
-              <SelectField name="llm.provider" label="模型厂商" help="选择要使用的大模型服务商。" defaultValue={getNested(settings, "llm.provider", "managed")} options={[["managed", "内置服务"], ["openai", "OpenAI"], ["anthropic", "Anthropic Claude"], ["gemini", "Google Gemini"], ["deepseek", "DeepSeek"], ["qwen", "Qwen / 百炼"], ["doubao", "Doubao / 火山方舟"], ["kimi", "Moonshot / Kimi"], ["glm", "Zhipu GLM"], ["openrouter", "OpenRouter"], ["ollama", "Ollama"], ["custom", "自定义 OpenAI-compatible"]]} />
-              <LabelInput label="Base URL" help="模型服务的 API 基础地址，留空使用厂商默认值。" name="llm.baseUrl" defaultValue={getNested(settings, "llm.baseUrl", "")} className="w-56" />
-              <LabelInput label="API Key 环境变量" help="存放 API Key 的环境变量名称，避免直接明文填写密钥。" name="llm.apiKeyEnv" defaultValue={getNested(settings, "llm.apiKeyEnv", "OPENAI_API_KEY")} className="w-44" />
-              <LabelInput label="默认文本模型" help="用于翻译、标题、描述、标签、评论文案等文字生成任务。" name="llm.textModel" defaultValue={getNested(settings, "llm.textModel", "gpt-4.1-mini")} className="w-44" />
-              <LabelInput label="默认视觉模型" help="用于看视频截图、选择封面画面、理解图片内容；不需要时可以留空。" name="llm.visionModel" defaultValue={getNested(settings, "llm.visionModel", "gpt-4.1-mini")} className="w-44" />
-              <SelectField name="llm.thinking" label="Thinking / Reasoning" help="开启后模型会花更多时间推理；翻译通常不需要高等级。" defaultValue={getNested(settings, "llm.thinking", "auto")} options={[["off", "关闭"], ["auto", "自动"], ["low", "低"], ["medium", "中"], ["high", "高"]]} optionHelp={{ off: "不使用推理步骤，响应最快，适合简单翻译任务", auto: "模型自动决定是否启用推理，平衡速度与质量", low: "较短推理链，轻微提升复杂任务质量", medium: "中等推理深度，适合需要多步思考的内容", high: "深度推理，质量最好，但响应较慢且成本更高" }} />
-              <SelectField name="llm.temperatureMode" label="温度" help="稳定更像翻译工具；创意更适合标题和营销文案。" defaultValue={getNested(settings, "llm.temperatureMode", "balanced")} options={[["stable", "稳定"], ["balanced", "平衡"], ["creative", "创意"]]} optionHelp={{ stable: "输出稳定可复现，适合精确翻译和格式化任务", balanced: "平衡创意与稳定，适合大多数任务", creative: "更多样化的输出，适合营销文案、标题生成等创意任务" }} />
-              <SelectField name="llm.maxOutputMode" label="最大输出长度" help="限制模型单次生成的 token 数量。" defaultValue={getNested(settings, "llm.maxOutputMode", "standard")} options={[["short", "短"], ["standard", "标准"], ["long", "长"]]} optionHelp={{ short: "限制单次输出长度，适合短字幕或标题", standard: "标准输出长度，适合大多数内容", long: "允许长输出，适合长视频字幕批量翻译" }} />
-              <LabelInput label="超时秒数" name="llm.timeoutSec" type="number" defaultValue={getNested(settings, "llm.timeoutSec", 120)} className="w-20" />
-              <LabelInput label="重试次数" name="llm.retryCount" type="number" defaultValue={getNested(settings, "llm.retryCount", 2)} className="w-16" />
-              <p className="py-2 text-muted-foreground text-xs">默认文本模型会用于字幕翻译、评论翻译、标题、描述、标签/话题和封面文案生成。默认视觉模型只用于封面画面选择。</p>
+            <SettingsSection title="LLM" description="配置兼容 OpenAI API 格式的模型服务。">
+              <WideLabelInput label="URL" help="兼容 OpenAI API 格式的基础地址。" name="llm.baseUrl" placeholder="https://ark.cn-beijing.volces.com/api/v3" defaultValue={getNested(settings, "llm.baseUrl", "")} />
+              <WideLabelInput label="模型名称" name="llm.textModel" placeholder="doubao-seed-2-0-mini-260428" defaultValue={getNested(settings, "llm.textModel", "gpt-4.1-mini")} />
+              <WideLabelInput label="API Key" name="llm.apiKey" type="password" placeholder="填入火山方舟 API Key" defaultValue={getNested(settings, "llm.apiKey", "")} />
             </SettingsSection>
           </SettingsPane>
 
@@ -1349,6 +1340,21 @@ function LabelInput({ label, help, className, ...props }: React.ComponentProps<t
     <SettingRow label={label} help={help}>
       <Input {...props} id={controlId} className={cn("w-28", className)} />
     </SettingRow>
+  );
+}
+
+function WideLabelInput({ label, help, className, ...props }: React.ComponentProps<typeof Input> & { label: string; help?: React.ReactNode }) {
+  const controlId = props.id || cleanId(String(props.name || label));
+  return (
+    <div className="flex min-h-10 items-center gap-6 py-2.5">
+      <div className="flex w-28 shrink-0 items-center gap-1 font-medium text-sm leading-snug">
+        {label}
+        <HelpTooltip>{help}</HelpTooltip>
+      </div>
+      <div className="min-w-0 flex-1">
+        <Input {...props} id={controlId} className={cn("w-full", className)} />
+      </div>
+    </div>
   );
 }
 

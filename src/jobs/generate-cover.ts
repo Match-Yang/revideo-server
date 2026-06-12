@@ -148,13 +148,13 @@ function encodeImageToBase64(imagePath: string): string {
 // Shared chat-completion call against the OpenAI-compatible endpoint.
 async function callCoverCompletion(messages: unknown[]): Promise<string> {
   const config = getTranslateConfig();
-  const apiKey = process.env[config.apiKeyEnv];
+  const apiKey = config.apiKey;
   if (!apiKey) {
-    throw new Error(`Missing API key env: ${config.apiKeyEnv}`);
+    throw new Error("Missing LLM API key in settings");
   }
   const timeoutMs = Math.max(
     1000,
-    Number(process.env.TRANSLATE_TIMEOUT_MS || 120000),
+    Number(config.timeoutMs || 120000),
   );
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

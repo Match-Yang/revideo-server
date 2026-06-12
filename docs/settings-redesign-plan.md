@@ -508,7 +508,6 @@ interface RevideoSettingsV2 {
     serviceMode: "managed" | "custom";
     provider: string;
     baseUrl?: string;
-    apiKeyEnv?: string;
     apiKey?: string;
     textModel: string;
     visionModel?: string;

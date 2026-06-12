@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { loadJob, saveJob, setJobStep } from "../src/jobs/store";
 import { translateSubtitles } from "../src/jobs/translate-job";
 

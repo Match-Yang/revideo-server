@@ -128,7 +128,7 @@ export interface RevideoSettings {
     serviceMode: LlmServiceMode;
     provider: string;
     baseUrl: string;
-    apiKeyEnv: string;
+    apiKey: string;
     textModel: string;
     visionModel: string;
     thinking: "off" | "auto" | "low" | "medium" | "high";
@@ -286,10 +286,10 @@ export const defaultSettings: RevideoSettings = {
     serviceMode: "managed",
     provider: "managed",
     baseUrl: "",
-    apiKeyEnv: "OPENAI_API_KEY",
+    apiKey: "",
     textModel: "gpt-4.1-mini",
     visionModel: "gpt-4.1-mini",
-    thinking: "auto",
+    thinking: "off",
     temperatureMode: "balanced",
     maxOutputMode: "standard",
     timeoutSec: 120,
@@ -332,7 +332,14 @@ function deepMerge<T>(base: T, value: unknown): T {
 }
 
 function mergeSettings(value: unknown = {}): RevideoSettings {
-  return deepMerge(defaultSettings, value);
+  const settings = deepMerge(defaultSettings, value);
+  return {
+    ...settings,
+    llm: {
+      ...settings.llm,
+      thinking: "off",
+    },
+  };
 }
 
 export function loadSettings(): RevideoSettings {

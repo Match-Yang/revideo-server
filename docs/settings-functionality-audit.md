@@ -27,7 +27,7 @@
 | 封面与文案 | `task.coverAndCopy.template`, `task.coverAndCopy.imageMode`, `task.coverAndCopy.fixedFrameIndex`, `task.coverAndCopy.copyMode`, `task.coverAndCopy.fixedCopy.*`, `task.coverAndCopy.aiPrompt` |
 | 渲染 | `task.render.outputDir`, `task.render.renderComments`, `task.render.commentFontSize`, `task.render.commentLineHeight`, `task.render.subtitleFontSize`, `task.render.subtitleLineHeight`, `task.render.commentContent`, `task.render.longCommentBehavior`, `task.render.repeatTimes`, `task.render.outputFormat` |
 | 发布 | `task.publish.defaultPlatforms`（由平台启用开关写入）, `task.publish.platformConfigs.*.defaultAction`, `task.publish.platformConfigs.*.retryCount`, 各平台特殊配置, 各平台 `prompts.title/description/tags` |
-| LLM | `llm.serviceMode`, `llm.provider`, `llm.baseUrl`, `llm.apiKeyEnv`, `llm.textModel`, `llm.visionModel`, `llm.thinking`, `llm.temperatureMode`, `llm.maxOutputMode`, `llm.timeoutSec`, `llm.retryCount` |
+| LLM | `llm.baseUrl`, `llm.textModel`, `llm.apiKey` |
 | Agent | `agent.enabled`, `agent.type`, `agent.connectionMode`, `agent.handoffMode`, `agent.token`, `agent.channels.*` |
 
 ### 已从设置类型移除并改为固定逻辑的字段
@@ -52,7 +52,7 @@
 | `task.publish.defaultAction` | 创建任务弹窗单次选择发布方式；未选择时固定为 `publish` |
 | `task.publish.retryCount` | 只保留平台级 `retryCount`；缺省为 `1` |
 | `task.publish.preflightChecks.*` | 发布预检固定执行 adapter、文件、文案、登录检查 |
-| `llm.apiKey` | UI 只保留 `apiKeyEnv`，不保存明文 Key |
+| 旧版 LLM 高级字段 | LLM 设置页只保留 URL、模型名称和 API Key；Thinking 固定关闭 |
 
 ## 功能审计（以当前设置页 UI 为准）
 

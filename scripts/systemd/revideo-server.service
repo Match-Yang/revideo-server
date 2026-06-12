@@ -15,7 +15,6 @@ StartLimitBurst=5
 StartLimitIntervalSec=60
 
 Environment=NODE_ENV=production
-EnvironmentFile=-{{INSTALL_DIR}}/.env
 
 # Security hardening
 NoNewPrivileges=true

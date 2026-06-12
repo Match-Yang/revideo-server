@@ -75,7 +75,7 @@ Key modules in `src/jobs/`:
 
 ### Translation
 
-Uses an OpenAI-compatible chat completions API (`src/translate/openai-compatible.ts`), configured via `TRANSLATE_BASE_URL`, `TRANSLATE_MODEL`, `TRANSLATE_API_KEY_ENV` env vars. Currently configured for Volcengine Ark.
+Uses an OpenAI-compatible chat completions API (`src/translate/openai-compatible.ts`), configured from the Dashboard settings page and persisted in `data/settings.json`.
 
 ### Legacy Coexistence
 
@@ -90,8 +90,7 @@ Legacy folder-based rendering (`src/renderer.ts`) and task management (`src/task
 
 ## Configuration
 
-- `.env` — Port, translation API config, binary path overrides
-- `src/config.ts` — Resolves all data paths from env
+- `src/config.ts` — Resolves server port and data paths from process environment variables
 - `src/settings.ts` — Deep-mergeable `RevideoSettings` persisted to `data/settings.json`
 
 ## Browser Automation

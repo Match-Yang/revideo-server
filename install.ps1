@@ -251,25 +251,6 @@ function Download-AndExtract {
 
 # --- Setup ---
 
-function Setup-Env {
-    if (Test-Path "$InstallDir\.env") {
-        Write-Success ".env already exists, keeping it"
-        return
-    }
-
-    if (Test-Path "$InstallDir\.env.example") {
-        Copy-Item "$InstallDir\.env.example" "$InstallDir\.env"
-    }
-
-    if ($Port -ne 3001) {
-        $content = Get-Content "$InstallDir\.env" -Raw
-        $content = $content -replace 'REVIDEO_PORT=.*', "REVIDEO_PORT=$Port"
-        Set-Content "$InstallDir\.env" $content -NoNewline
-    }
-
-    Write-Info ".env created from template. Configure translation API in the dashboard settings."
-}
-
 function Setup-Service {
     Write-Info "Setting up scheduled task for auto-start..."
 
@@ -374,7 +355,6 @@ Ensure-Node
 Ensure-YtDlp
 Ensure-Ffmpeg
 Download-AndExtract
-Setup-Env
 Test-Chrome
 Setup-Service
 Test-Health
@@ -384,7 +364,6 @@ Write-Success "Installation complete!"
 Write-Host ""
 Write-Host "  Dashboard:  http://localhost:$Port" -ForegroundColor Cyan
 Write-Host "  Health:     http://localhost:$Port/api/health" -ForegroundColor Cyan
-Write-Host "  Config:     $InstallDir\.env"
 Write-Host "  Data:       $InstallDir\data\"
 Write-Host ""
 Write-Host "  Service:    Get-ScheduledTask -TaskName RevideoServer"

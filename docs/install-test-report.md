@@ -28,7 +28,7 @@
 | ffmpeg + ffprobe 安装 | ✅ 从 evermeet.cx 下载 macOS 静态编译包 | ~5s |
 | Chrome 检测 | ✅ 系统 Chrome 已安装 | <1s |
 | 解压预打包 | ✅ 435MB tar.gz 解压 | ~8s |
-| .env 创建 | ✅ 从 .env.example 复制 | <1s |
+| 设置初始化 | ✅ 使用 `data/settings.json` | <1s |
 | launchd 服务 | ✅ 注册并启动 | ~2s |
 | 健康检查 | ✅ `/api/health` 返回 `{"ok": true}` | ~10s |
 
@@ -120,7 +120,7 @@ bash install.sh --uninstall
 |------|----------|
 | `tsconfig.json` | `noEmit: true` → 编译输出到 `dist/` |
 | `package.json` | 添加 `build`/`start` scripts、`engines`、`license: MIT` |
-| `.env.example` | 扩展文档化所有 env vars |
+| `src/settings.ts` | 使用 `data/settings.json` 保存运行配置 |
 | `.gitignore` | 添加 `dist/`、release 包 |
 | `README.md` | Quick Install section |
 | `scripts/restart-ui.sh` | `tsx src/server.ts` → `node dist/server.js` |

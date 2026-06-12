@@ -83,7 +83,6 @@ jobs:
           rm -f dashboard/package.json dashboard/tsconfig.json dashboard/next.config.ts
           rm -rf node_modules/.cache
           rm -f tsconfig.json eslint.config.mjs .prettierrc .prettierignore
-          rm -f .env .env.local
           rm -f .DS_Store Thumbs.db
 
           # Remove puppeteer's bundled Chrome (~200MB)

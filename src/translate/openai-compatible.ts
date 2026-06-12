@@ -1,3 +1,5 @@
+import { loadSettings } from "../settings";
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -13,8 +15,9 @@ export interface TranslateProviderConfig {
   provider: "openai-compatible";
   baseUrl: string;
   model: string;
-  apiKeyEnv: string;
+  apiKey?: string;
   thinkingType?: "enabled" | "disabled" | "auto";
+  timeoutMs: number;
 }
 
 export interface TranslateRequest {
@@ -26,18 +29,16 @@ export interface TranslateRequest {
 }
 
 export function getTranslateConfig(): TranslateProviderConfig {
-  const apiKeyEnv =
-    process.env.TRANSLATE_API_KEY_ENV ||
-    (process.env.VOLCENGINE_API_KEY ? "VOLCENGINE_API_KEY" : undefined) ||
-    (process.env.ARK_API_KEY ? "ARK_API_KEY" : undefined) ||
-    "OPENAI_API_KEY";
+  const settings = loadSettings();
+  const llm = settings.llm;
 
   return {
     provider: "openai-compatible",
-    baseUrl: process.env.TRANSLATE_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-    model: process.env.TRANSLATE_MODEL || "gpt-4.1-mini",
-    apiKeyEnv,
-    thinkingType: (process.env.TRANSLATE_THINKING_TYPE as TranslateProviderConfig["thinkingType"]) || "disabled",
+    baseUrl: llm.baseUrl || "https://api.openai.com/v1",
+    model: llm.textModel || "gpt-4.1-mini",
+    apiKey: llm.apiKey,
+    thinkingType: "disabled",
+    timeoutMs: Math.max(1000, Number(llm.timeoutSec || 120) * 1000),
   };
 }
 
@@ -45,8 +46,11 @@ export function listTranslateProviders() {
   const config = getTranslateConfig();
   return [
     {
-      ...config,
-      configured: Boolean(process.env[config.apiKeyEnv]),
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      thinkingType: config.thinkingType,
+      configured: Boolean(config.apiKey),
     },
   ];
 }
@@ -61,11 +65,11 @@ export interface TranslateJSONRequest {
 
 export async function translateJSON<T>(req: TranslateJSONRequest): Promise<T> {
   const config = getTranslateConfig();
-  const apiKey = process.env[config.apiKeyEnv];
+  const apiKey = config.apiKey;
   if (!apiKey) {
-    throw new Error(`Missing API key env: ${config.apiKeyEnv}`);
+    throw new Error("Missing LLM API key in settings");
   }
-  const timeoutMs = Math.max(1000, Number(process.env.TRANSLATE_TIMEOUT_MS || 120000));
+  const timeoutMs = config.timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -135,11 +139,11 @@ export async function translateJSON<T>(req: TranslateJSONRequest): Promise<T> {
 
 export async function translateText(req: TranslateRequest): Promise<string> {
   const config = getTranslateConfig();
-  const apiKey = process.env[config.apiKeyEnv];
+  const apiKey = config.apiKey;
   if (!apiKey) {
-    throw new Error(`Missing API key env: ${config.apiKeyEnv}`);
+    throw new Error("Missing LLM API key in settings");
   }
-  const timeoutMs = Math.max(1000, Number(process.env.TRANSLATE_TIMEOUT_MS || 120000));
+  const timeoutMs = config.timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -208,11 +212,11 @@ export async function translateText(req: TranslateRequest): Promise<string> {
 
 export async function translateTextWithUsage(req: TranslateRequest): Promise<TranslateTextResult> {
   const config = getTranslateConfig();
-  const apiKey = process.env[config.apiKeyEnv];
+  const apiKey = config.apiKey;
   if (!apiKey) {
-    throw new Error(`Missing API key env: ${config.apiKeyEnv}`);
+    throw new Error("Missing LLM API key in settings");
   }
-  const timeoutMs = Math.max(1000, Number(process.env.TRANSLATE_TIMEOUT_MS || 120000));
+  const timeoutMs = config.timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 

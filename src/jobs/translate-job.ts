@@ -17,6 +17,12 @@ import {
   parseSubtitleTimestamp,
 } from "../subtitles/normalize";
 
+const DEFAULT_COMMENT_TRANSLATION_LIMIT = 800;
+const COMMENT_TRANSLATION_BATCH_SIZE = 50;
+const COMMENT_TRANSLATION_CONCURRENCY = 10;
+const SUBTITLE_TRANSLATION_BATCH_SIZE = 100;
+const SUBTITLE_TRANSLATION_CONCURRENCY = 10;
+
 interface CommentLike {
   text?: string;
   replies?: CommentLike[];
@@ -220,10 +226,10 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
     return { status: "skipped" as const, inputCount: 0, droppedCount: 0 };
   }
 
-  const configuredLimit = Number(process.env.TRANSLATE_COMMENT_LIMIT || 800);
+  const configuredLimit = DEFAULT_COMMENT_TRANSLATION_LIMIT;
   const targetCount = Number(job.options.targetCommentCount || configuredLimit);
   const limit = Math.max(1, Math.min(configuredLimit, targetCount));
-  const batchSize = Number(process.env.TRANSLATE_COMMENT_BATCH_SIZE || 50);
+  const batchSize = COMMENT_TRANSLATION_BATCH_SIZE;
   const selected = candidates.slice(0, limit);
   let droppedCount = 0;
 
@@ -238,7 +244,7 @@ async function translateComments(job: RevideoJob, targetLanguage: string) {
   });
 
   const batches = chunk(inputs, batchSize);
-  const concurrency = Math.min(10, Math.max(1, Number(process.env.TRANSLATE_COMMENT_CONCURRENCY || 10)));
+  const concurrency = COMMENT_TRANSLATION_CONCURRENCY;
   const batchResults = await mapConcurrent(batches, concurrency, (batch) =>
     translateBatchWithSafetyReview(batch, targetLanguage, "comment", context, extraInstructions)
   );
@@ -401,7 +407,7 @@ async function translateSubtitleFile(
 }> {
   const content = fs.readFileSync(sourcePath, "utf-8").replace(/\r\n/g, "\n");
   const cues = parseSubtitleCues(content);
-  const batchSize = Number(process.env.TRANSLATE_SUBTITLE_BATCH_SIZE || 100);
+  const batchSize = SUBTITLE_TRANSLATION_BATCH_SIZE;
 
   const cueById = new Map(cues.map((cue) => [cue.id, cue]));
   const fullSubtitleText = buildFullSubtitleContext(cues);
@@ -414,7 +420,7 @@ async function translateSubtitleFile(
   let failedCount = 0;
 
   const batches = chunk(inputs, batchSize);
-  const concurrency = Math.min(10, Math.max(1, Number(process.env.TRANSLATE_SUBTITLE_CONCURRENCY || 10)));
+  const concurrency = SUBTITLE_TRANSLATION_CONCURRENCY;
 
   // Cache warmup: first batch completes, wait 3s for cache persistence, then remaining batches concurrent
   const batchResults: Awaited<ReturnType<typeof translateSubtitleBatchWithContext>>[] = [];

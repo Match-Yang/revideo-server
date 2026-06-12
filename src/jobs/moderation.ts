@@ -1,5 +1,7 @@
 import { translateText } from "../translate/openai-compatible";
 
+const MAX_BATCH_TRANSLATION_ATTEMPTS = 3;
+
 export interface SafetyReviewedTranslation {
   action: "keep" | "drop";
   translation?: string;
@@ -751,7 +753,7 @@ export async function translateSubtitleBatchWithContext(
 ): Promise<SubtitleSafetyReviewOutput[]> {
   if (inputs.length === 0) return [];
 
-  const maxBatchAttempts = Math.max(1, Number(process.env.TRANSLATE_BATCH_RETRY_LIMIT || 3));
+  const maxBatchAttempts = MAX_BATCH_TRANSLATION_ATTEMPTS;
   let lastRetryableError: BatchRetryableTranslationError | undefined;
 
   for (let attempt = 1; attempt <= maxBatchAttempts; attempt += 1) {
@@ -794,7 +796,7 @@ export async function translateBatchWithSafetyReview(
 ): Promise<SafetyReviewOutput[]> {
   if (inputs.length === 0) return [];
 
-  const maxBatchAttempts = Math.max(1, Number(process.env.TRANSLATE_BATCH_RETRY_LIMIT || 3));
+  const maxBatchAttempts = MAX_BATCH_TRANSLATION_ATTEMPTS;
   let lastRetryableError: BatchRetryableTranslationError | undefined;
 
   for (let attempt = 1; attempt <= maxBatchAttempts; attempt += 1) {

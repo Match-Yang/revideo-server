@@ -391,28 +391,6 @@ download_and_extract() {
 }
 
 # ---------------------------------------------------------------------------
-# .env setup
-# ---------------------------------------------------------------------------
-setup_env() {
-  if [[ -f "$INSTALL_DIR/.env" ]]; then
-    success ".env already exists, keeping it"
-    return
-  fi
-
-  if [[ -f "$INSTALL_DIR/.env.example" ]]; then
-    cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
-  fi
-
-  # Set port
-  if [[ "$PORT" != "$DEFAULT_PORT" ]]; then
-    sed -i.bak "s/^REVIDEO_PORT=.*/REVIDEO_PORT=${PORT}/" "$INSTALL_DIR/.env" 2>/dev/null || \
-      sed -i "s/^REVIDEO_PORT=.*/REVIDEO_PORT=${PORT}/" "$INSTALL_DIR/.env" 2>/dev/null || true
-  fi
-
-  info ".env created from template. Configure translation API in the dashboard settings."
-}
-
-# ---------------------------------------------------------------------------
 # Service setup
 # ---------------------------------------------------------------------------
 setup_service_systemd() {
@@ -572,42 +550,39 @@ print_banner() {
 main() {
   print_banner
 
-  if [[ "$ACTION" == "uninstall" ]]; then
-    do_uninstall
-  fi
-
-  # 1. Detect environment
+  # Uninstall needs OS detection for service cleanup, but should not require
+  # the install-only prerequisite checks.
   detect_os
   detect_arch
   info "Platform: ${OS}-${ARCH} (${DISTRO:-$(uname -s)})"
 
-  # 2. Ensure prerequisites
+  if [[ "$ACTION" == "uninstall" ]]; then
+    do_uninstall
+  fi
+
+  # 1. Ensure prerequisites
   ensure_node
   ensure_yt_dlp
   ensure_ffmpeg
 
-  # 3. Download and extract
+  # 2. Download and extract
   download_and_extract "$VERSION"
 
-  # 4. Setup .env
-  setup_env
-
-  # 5. Check Chrome (non-blocking)
+  # 3. Check Chrome (non-blocking)
   check_chrome
 
-  # 6. Install and start service
+  # 4. Install and start service
   setup_service
 
-  # 7. Health check
+  # 5. Health check
   health_check
 
-  # 8. Success
+  # 6. Success
   printf "\n"
   success "${BOLD}Installation complete!${NC}"
   printf "\n"
   printf "  Dashboard:  ${CYAN}http://localhost:${PORT}${NC}\n"
   printf "  Health:     ${CYAN}http://localhost:${PORT}/api/health${NC}\n"
-  printf "  Config:     ${INSTALL_DIR}/.env\n"
   printf "  Data:       ${INSTALL_DIR}/data/\n"
   printf "\n"
 
