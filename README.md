@@ -4,6 +4,8 @@
 
 源平台 → 标准化资源 → 处理流水线 → 目标平台
 
+![](images/jobs.png)
+
 ## 一键安装
 
 **Linux / macOS：**
@@ -75,12 +77,13 @@ npm run lint           # eslint + tsc 类型检查
 ## 配置翻译
 
 在 Dashboard 的设置页面中配置 LLM：填写兼容 OpenAI API 格式的 URL、模型名称和 API Key。Thinking 默认关闭。
+![](images/llm-settings.png)
 
 ## 联系我
 
 如果有疑问或者需要技术支持的，可以联系我。
 
-![](wechat.jpg)
+![](images/wechat.jpg)
 
 ## License
 
