@@ -3,7 +3,7 @@ import path from "path";
 import { spawn } from "child_process";
 import sharp from "sharp";
 import type { Comment } from "../types";
-import { textWidth, wrapParagraph, wrapSubtitleVttFile } from "../subtitles/wrap";
+import { textWidth, wrapParagraph, prepareSubtitleVttFile } from "../subtitles/wrap";
 
 export type CommentStyleName = "classic-dark" | "light" | "bilibili" | "douyin" | "xiaohongshu";
 export type SizeName = "small" | "medium" | "large";
@@ -161,6 +161,10 @@ export interface FfmpegCommentRenderOptions {
   signal?: AbortSignal;
   onProgress?: (progress: FfmpegCommentRenderProgress) => void;
   style?: CommentRenderStyle;
+  /** How many times the source video loops (subtitles are tiled to match). */
+  repeatTimes?: number;
+  /** Duration of a single video loop, for subtitle tiling when repeatTimes > 1. */
+  segmentDurationSec?: number;
 }
 
 interface LaidOutComment {
@@ -390,14 +394,24 @@ function writeFrame(stdin: NodeJS.WritableStream, buffer: Buffer): Promise<void>
   });
 }
 
-// Wrap the subtitle into a temp VTT so long (CJK) lines center-wrap instead of
-// being clipped by libass. Falls back to the original path if wrapping fails so
+// Prepare the subtitle into a temp VTT: wrap long (CJK) lines so they
+// center-wrap instead of being clipped, and tile across video repeats so
+// subtitles appear on every loop. Falls back to the original path on failure so
 // rendering never breaks. Renders are single-concurrent, so the temp name is safe.
-function prepareSubtitlePath(subtitlePath: string | undefined, fontSize: number): string | undefined {
+function prepareSubtitlePath(
+  subtitlePath: string | undefined,
+  fontSize: number,
+  repeatTimes?: number,
+  segmentDurationSec?: number,
+): string | undefined {
   if (!subtitlePath || !fs.existsSync(subtitlePath)) return subtitlePath;
   const wrappedPath = `/tmp/revideo-subtitle-${path.basename(subtitlePath, path.extname(subtitlePath))}.vtt`;
   try {
-    return wrapSubtitleVttFile(subtitlePath, wrappedPath, fontSize);
+    return prepareSubtitleVttFile(subtitlePath, wrappedPath, {
+      fontSize,
+      repeatTimes,
+      segmentDurationSec,
+    });
   } catch {
     return subtitlePath;
   }
@@ -433,7 +447,12 @@ export async function renderFfmpegComments(
   const layout = buildLayout(style);
   const subtitleFontSize = SUBTITLE_FONT_SIZE[style.subtitleFontSize] || SUBTITLE_FONT_SIZE.medium;
   const subtitleLineHeight = style.subtitleLineHeight || "standard";
-  const subtitlePath = prepareSubtitlePath(options.subtitlePath, subtitleFontSize);
+  const subtitlePath = prepareSubtitlePath(
+    options.subtitlePath,
+    subtitleFontSize,
+    options.repeatTimes,
+    options.segmentDurationSec,
+  );
   const comments = layoutComments(readComments(options.commentPath), layout, options.avatarDir);
   const totalFrames = Math.ceil(options.durationSec * fps);
   const filter = buildFilter(options, layout, subtitleFontSize, subtitleLineHeight, subtitlePath);

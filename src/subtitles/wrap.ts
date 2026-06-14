@@ -117,6 +117,8 @@ export function wrapSubtitleText(text: string, maxWidthEm: number): string {
 }
 
 const TIMING_RE = /\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}/;
+const TIMING_PARSE_RE =
+  /(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})/;
 
 /** Wrap every cue in a WebVTT document; non-cue blocks (header) are preserved. */
 export function wrapSubtitleVtt(content: string, maxWidthEm: number): string {
@@ -134,13 +136,127 @@ export function wrapSubtitleVtt(content: string, maxWidthEm: number): string {
   return `${wrapped.join("\n\n").trim()}\n`;
 }
 
+function parseVttTime(value: string): number {
+  const match = value.trim().match(/^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$/);
+  if (!match) return 0;
+  return (
+    Number(match[1]) * 3600 +
+    Number(match[2]) * 60 +
+    Number(match[3]) +
+    Number(match[4]) / 1000
+  );
+}
+
+function formatVttTime(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = Math.floor(safe % 60);
+  const millis = Math.round((safe - Math.floor(safe)) * 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+interface ParsedCue {
+  start: number;
+  end: number;
+  body: string;
+}
+
+function parseCues(content: string): { header: string; cues: ParsedCue[] } {
+  const text = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const blocks = text.split(/\n[ \t]*\n/);
+  const headerParts: string[] = [];
+  const cues: ParsedCue[] = [];
+
+  for (const block of blocks) {
+    if (!TIMING_PARSE_RE.test(block)) {
+      if (block.trim()) headerParts.push(block.trim());
+      continue;
+    }
+    const lines = block.split("\n");
+    const timingIdx = lines.findIndex((line) => TIMING_PARSE_RE.test(line));
+    const match = lines[timingIdx].match(TIMING_PARSE_RE);
+    if (!match) continue;
+    const body = lines.slice(timingIdx + 1).join("\n").trim();
+    if (!body) continue;
+    cues.push({ start: parseVttTime(match[1]), end: parseVttTime(match[2]), body });
+  }
+
+  return { header: headerParts.join("\n") || "WEBVTT", cues };
+}
+
 /**
- * Wrap a VTT file on disk into `destPath`, sized for the given ASS font size.
- * If reading or wrapping fails, copies the source verbatim so rendering never
- * breaks. Returns `destPath`.
+ * Tile the subtitle cues across `repeatTimes` video loops so subtitles appear on
+ * every repeat, not just the first. Each repeat's cues are offset by
+ * `segmentDurationSec` (the single-loop video duration) and clamped to the
+ * segment boundary, so they stay in sync with the looped video and never overlap
+ * an adjacent repeat. Cues whose end already straddles a boundary are trimmed.
  */
-export function wrapSubtitleVttFile(srcPath: string, destPath: string, fontSize: number): string {
+export function expandSubtitleVtt(
+  content: string,
+  segmentDurationSec: number,
+  repeatTimes: number,
+): string {
+  const repeats = Math.min(10, Math.max(1, Math.floor(Number(repeatTimes) || 1)));
+  if (repeats <= 1 || !segmentDurationSec || segmentDurationSec <= 0) {
+    return content;
+  }
+
+  const { header, cues } = parseCues(content);
+  if (cues.length === 0) return content;
+
+  const total = segmentDurationSec * repeats;
+  const expanded: ParsedCue[] = [];
+
+  for (let repeat = 0; repeat < repeats; repeat += 1) {
+    const offset = repeat * segmentDurationSec;
+    const segEnd = Math.min((repeat + 1) * segmentDurationSec, total);
+    for (const cue of cues) {
+      const start = cue.start + offset;
+      if (start >= total) continue;
+      const end = Math.min(cue.end + offset, segEnd);
+      if (end <= start) continue;
+      expanded.push({ start, end, body: cue.body });
+    }
+  }
+
+  expanded.sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const body = expanded
+    .map((cue) => `${formatVttTime(cue.start)} --> ${formatVttTime(cue.end)}\n${cue.body}`)
+    .join("\n\n");
+
+  return `${header}\n\n${body}\n`;
+}
+
+export interface SubtitlePrepareOptions {
+  fontSize: number;
+  /** How many times the source video loops. Subtitles are tiled to match. */
+  repeatTimes?: number;
+  /** Duration of a single video loop; required for repeat tiling. */
+  segmentDurationSec?: number;
+}
+
+/** Wrap long lines and (optionally) tile across repeats, in one pass. */
+export function prepareSubtitleVtt(content: string, options: SubtitlePrepareOptions): string {
+  const wrapped = wrapSubtitleVtt(content, subtitleMaxWidthEm(options.fontSize));
+  if (options.repeatTimes && options.repeatTimes > 1 && options.segmentDurationSec) {
+    return expandSubtitleVtt(wrapped, options.segmentDurationSec, options.repeatTimes);
+  }
+  return wrapped;
+}
+
+/**
+ * Prepare a VTT file on disk into `destPath` (wrap + optional repeat tiling),
+ * sized for the given ASS font size. If reading or processing fails, copies the
+ * source verbatim so rendering never breaks. Returns `destPath`.
+ */
+export function prepareSubtitleVttFile(
+  srcPath: string,
+  destPath: string,
+  options: SubtitlePrepareOptions,
+): string {
   const content = fs.readFileSync(srcPath, "utf-8");
-  fs.writeFileSync(destPath, wrapSubtitleVtt(content, subtitleMaxWidthEm(fontSize)), "utf-8");
+  fs.writeFileSync(destPath, prepareSubtitleVtt(content, options), "utf-8");
   return destPath;
 }

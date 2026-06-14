@@ -6,7 +6,7 @@ import http from "http";
 import type { DirInfo, Comment } from "./types";
 import { scanMoviesDir } from "./scan-dir";
 import { renderFfmpegComments, type CommentRenderStyle, type LineHeightName, type SizeName } from "./renderers/ffmpeg-comments";
-import { wrapSubtitleVttFile } from "./subtitles/wrap";
+import { prepareSubtitleVttFile } from "./subtitles/wrap";
 
 export interface RenderConfig {
   style?: CommentRenderStyle;
@@ -331,6 +331,8 @@ export async function renderWithFFmpeg(
       signal,
       onProgress,
       style: renderConfig?.style,
+      repeatTimes,
+      segmentDurationSec: sourceVideoDurationSec,
     });
   } else {
     const vfParts: string[] = [];
@@ -341,9 +343,13 @@ export async function renderWithFFmpeg(
       const isPortrait = target.height > target.width;
       const sizeName = renderConfig?.subtitleFontSize || "medium";
       const fontSize = NON_COMMENT_SUBTITLE_FONT[sizeName];
-      // Wrap long (CJK) lines so they center-wrap instead of being clipped.
+      // Wrap long (CJK) lines and tile across video repeats so subtitles show on every loop.
       try {
-        wrapSubtitleVttFile(subtitlePath, tmpSub, fontSize);
+        prepareSubtitleVttFile(subtitlePath, tmpSub, {
+          fontSize,
+          repeatTimes,
+          segmentDurationSec: sourceVideoDurationSec,
+        });
       } catch {
         fs.copyFileSync(subtitlePath, tmpSub);
       }
