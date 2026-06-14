@@ -5,18 +5,9 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 
-import { AccountSwitcher } from "./_components/sidebar/account-switcher";
 import { LayoutControls } from "./_components/sidebar/layout-controls";
 import { SearchDialog } from "./_components/sidebar/search-dialog";
 import { ThemeSwitcher } from "./_components/sidebar/theme-switcher";
-
-const operator = {
-  id: "operator",
-  name: "Revideo Operator",
-  email: "local@revideo",
-  avatar: "",
-  role: "operator",
-};
 
 export default function Layout({ children }: Readonly<{ children: ReactNode }>) {
   return (
@@ -56,7 +47,6 @@ export default function Layout({ children }: Readonly<{ children: ReactNode }>) 
             <div className="flex items-center gap-2">
               <LayoutControls />
               <ThemeSwitcher />
-              <AccountSwitcher users={[operator]} />
             </div>
           </div>
         </header>

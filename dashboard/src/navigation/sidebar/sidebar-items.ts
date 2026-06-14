@@ -1,7 +1,5 @@
 import {
-  Activity,
   ClipboardList,
-  GalleryVerticalEnd,
   HeartPulse,
   Rocket,
   Settings,
@@ -72,27 +70,6 @@ export const sidebarItems: NavGroup[] = [
         titleKey: "sidebar.settings",
         url: "/dashboard/settings",
         icon: Settings,
-      },
-    ],
-  },
-  {
-    id: 3,
-    label: "Artifacts",
-    labelKey: "sidebar.artifacts",
-    items: [
-      {
-        title: "Rendered files",
-        titleKey: "sidebar.renderedFiles",
-        url: "/out",
-        icon: GalleryVerticalEnd,
-        newTab: true,
-      },
-      {
-        title: "API health",
-        titleKey: "sidebar.apiHealth",
-        url: "/api/health",
-        icon: Activity,
-        newTab: true,
       },
     ],
   },
