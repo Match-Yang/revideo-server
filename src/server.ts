@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { execFileSync } from "child_process";
 import { getDirs, getDirByName, renderWithFFmpeg } from "./renderer";
 import { scanDir } from "./scan-dir";
 import { publish, type PublishRequest } from "./publish";
@@ -221,6 +222,20 @@ function getRenderOutputDir(job: NonNullable<ReturnType<typeof loadJob>>): strin
   return settings.task?.render?.outputDir || defaultRenderDir();
 }
 
+function probeVideoDurationSec(videoPath: string): number {
+  try {
+    const out = execFileSync("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=nk=1:nw=1",
+      videoPath,
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    return parseFloat(out.toString().trim()) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 function existingRenderResult(job: NonNullable<ReturnType<typeof loadJob>>) {
   const renderDir = getRenderOutputDir(job);
   const settings = getJobSettings(job);
@@ -231,6 +246,15 @@ function existingRenderResult(job: NonNullable<ReturnType<typeof loadJob>>) {
   const normalized = job.source.metadata?.normalizedAssets as { durationSec?: number } | undefined;
   const durationSec = Math.max(0, Number(normalized?.durationSec || job.source.metadata?.durationSec || 0)) *
     Math.min(10, Math.max(1, Number(job.options.repeatTimes || 1)));
+
+  // A render killed mid-flight (e.g. by a server restart) leaves a playable but
+  // truncated file. Don't trust it as "completed" — verify the output duration
+  // is close to what was expected, otherwise fall through to a real re-render.
+  if (durationSec > 0) {
+    const actualDurationSec = probeVideoDurationSec(outputPath);
+    if (actualDurationSec <= 0 || actualDurationSec < durationSec * 0.9) return null;
+  }
+
   return {
     outputPath,
     coverPath: fs.existsSync(coverPath) ? coverPath : undefined,
