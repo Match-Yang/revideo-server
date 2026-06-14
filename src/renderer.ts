@@ -6,6 +6,7 @@ import http from "http";
 import type { DirInfo, Comment } from "./types";
 import { scanMoviesDir } from "./scan-dir";
 import { renderFfmpegComments, type CommentRenderStyle, type LineHeightName, type SizeName } from "./renderers/ffmpeg-comments";
+import { wrapSubtitleVttFile } from "./subtitles/wrap";
 
 export interface RenderConfig {
   style?: CommentRenderStyle;
@@ -337,10 +338,15 @@ export async function renderWithFFmpeg(
 
     if (subtitlePath) {
       const tmpSub = `/tmp/revideo-${dir.name}.vtt`;
-      fs.copyFileSync(subtitlePath, tmpSub);
       const isPortrait = target.height > target.width;
       const sizeName = renderConfig?.subtitleFontSize || "medium";
       const fontSize = NON_COMMENT_SUBTITLE_FONT[sizeName];
+      // Wrap long (CJK) lines so they center-wrap instead of being clipped.
+      try {
+        wrapSubtitleVttFile(subtitlePath, tmpSub, fontSize);
+      } catch {
+        fs.copyFileSync(subtitlePath, tmpSub);
+      }
       const lineSpacing = SUBTITLE_LINE_SPACING[renderConfig?.subtitleLineHeight || "standard"];
       const outlineWidth = Math.max(1, Math.round(fontSize / 8));
       if (isPortrait) {

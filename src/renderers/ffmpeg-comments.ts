@@ -3,6 +3,7 @@ import path from "path";
 import { spawn } from "child_process";
 import sharp from "sharp";
 import type { Comment } from "../types";
+import { textWidth, wrapParagraph, wrapSubtitleVttFile } from "../subtitles/wrap";
 
 export type CommentStyleName = "classic-dark" | "light" | "bilibili" | "douyin" | "xiaohongshu";
 export type SizeName = "small" | "medium" | "large";
@@ -205,66 +206,6 @@ function initials(author: string): string {
   return escapeXml((clean[0] || "?").toUpperCase());
 }
 
-function charWidth(char: string): number {
-  if (/[\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF\uAC00-\uD7AF]/u.test(char)) return 1;
-  if (/[A-Z]/.test(char)) return 0.64;
-  if (/[a-z0-9]/.test(char)) return 0.55;
-  if (/\s/.test(char)) return 0.32;
-  return 0.72;
-}
-
-function textWidth(text: string): number {
-  return [...text].reduce((sum, char) => sum + charWidth(char), 0);
-}
-
-function tokenizeParagraph(paragraph: string): string[] {
-  const tokens = paragraph.match(/[\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF\uAC00-\uD7AF]|[^\s\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF\uAC00-\uD7AF]+|\s+/gu);
-  return tokens || [];
-}
-
-function trimLineEnd(value: string): string {
-  return value.replace(/\s+$/g, "");
-}
-
-function wrapParagraph(paragraph: string, maxWidth: number): string[] {
-  const tokens = tokenizeParagraph(paragraph.replace(/\s+/g, " ").trim());
-  const lines: string[] = [];
-  let line = "";
-  let lineWidth = 0;
-
-  for (const token of tokens) {
-    const normalizedToken = /^\s+$/.test(token) ? " " : token;
-    const tokenWidth = textWidth(normalizedToken);
-
-    if (line && lineWidth + tokenWidth > maxWidth) {
-      lines.push(trimLineEnd(line));
-      line = normalizedToken.trimStart();
-      lineWidth = textWidth(line);
-    } else {
-      const appended = line ? normalizedToken : normalizedToken.trimStart();
-      line += appended;
-      lineWidth += textWidth(appended);
-    }
-
-    while (lineWidth > maxWidth && [...line].length > 1) {
-      let take = "";
-      let width = 0;
-      for (const char of [...line]) {
-        const nextWidth = width + charWidth(char);
-        if (take && nextWidth > maxWidth) break;
-        take += char;
-        width = nextWidth;
-      }
-      lines.push(trimLineEnd(take));
-      line = line.slice(take.length).trimStart();
-      lineWidth = textWidth(line);
-    }
-  }
-
-  if (line.trim()) lines.push(trimLineEnd(line));
-  return lines;
-}
-
 function wrapText(text: string, maxWidth: number, maxLines: number, ellipsis = true): TextLine[] {
   const paragraphs = plainText(text)
     .split(/\n+/)
@@ -449,6 +390,19 @@ function writeFrame(stdin: NodeJS.WritableStream, buffer: Buffer): Promise<void>
   });
 }
 
+// Wrap the subtitle into a temp VTT so long (CJK) lines center-wrap instead of
+// being clipped by libass. Falls back to the original path if wrapping fails so
+// rendering never breaks. Renders are single-concurrent, so the temp name is safe.
+function prepareSubtitlePath(subtitlePath: string | undefined, fontSize: number): string | undefined {
+  if (!subtitlePath || !fs.existsSync(subtitlePath)) return subtitlePath;
+  const wrappedPath = `/tmp/revideo-subtitle-${path.basename(subtitlePath, path.extname(subtitlePath))}.vtt`;
+  try {
+    return wrapSubtitleVttFile(subtitlePath, wrappedPath, fontSize);
+  } catch {
+    return subtitlePath;
+  }
+}
+
 function ffmpegSubtitleFilter(subtitlePath: string | undefined, fontSize: number, lineHeight: LineHeightName): string {
   if (!subtitlePath) return "";
   const escapedPath = subtitlePath.replace(/'/g, "'\\''").replace(/:/g, "\\:");
@@ -458,8 +412,8 @@ function ffmpegSubtitleFilter(subtitlePath: string | undefined, fontSize: number
   return `,subtitles='${escapedPath}':force_style='${style}'`;
 }
 
-function buildFilter(options: FfmpegCommentRenderOptions, layout: Layout, subtitleFontSize: number, subtitleLineHeight: LineHeightName): string {
-  const subtitleFilter = ffmpegSubtitleFilter(options.subtitlePath, subtitleFontSize, subtitleLineHeight);
+function buildFilter(options: FfmpegCommentRenderOptions, layout: Layout, subtitleFontSize: number, subtitleLineHeight: LineHeightName, subtitlePath?: string): string {
+  const subtitleFilter = ffmpegSubtitleFilter(subtitlePath, subtitleFontSize, subtitleLineHeight);
   const { width, height, videoHeight } = layout;
   const loopVideo = `[0:v]setpts=PTS-STARTPTS,scale=${width}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${width}:${videoHeight}:(ow-iw)/2:(oh-ih)/2:black${subtitleFilter}[video]`;
   return [
@@ -479,9 +433,10 @@ export async function renderFfmpegComments(
   const layout = buildLayout(style);
   const subtitleFontSize = SUBTITLE_FONT_SIZE[style.subtitleFontSize] || SUBTITLE_FONT_SIZE.medium;
   const subtitleLineHeight = style.subtitleLineHeight || "standard";
+  const subtitlePath = prepareSubtitlePath(options.subtitlePath, subtitleFontSize);
   const comments = layoutComments(readComments(options.commentPath), layout, options.avatarDir);
   const totalFrames = Math.ceil(options.durationSec * fps);
-  const filter = buildFilter(options, layout, subtitleFontSize, subtitleLineHeight);
+  const filter = buildFilter(options, layout, subtitleFontSize, subtitleLineHeight, subtitlePath);
 
   emit(options, "encoding", 8, `准备 FFmpeg 评论层 (${comments.length} 条)...`);
 
