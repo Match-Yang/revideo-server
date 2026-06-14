@@ -49,6 +49,12 @@ export interface SourceAssetManifest {
   infoPath?: string;
   subtitlePaths: string[];
   commentPath?: string;
+  comments?: {
+    attempted?: boolean;
+    count?: number;
+    expectedCount?: number;
+    reason?: string;
+  };
 }
 
 export interface SourceAdapter {

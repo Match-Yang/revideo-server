@@ -314,11 +314,23 @@ function hasUsableExistingTranslation(job: NonNullable<ReturnType<typeof loadJob
       }
     | undefined;
   if (!translation) return false;
+  const normalizedAssets = job.source.metadata?.normalizedAssets as
+    | {
+        normalizedCommentsPath?: string;
+        subtitlePaths?: string[];
+      }
+    | undefined;
+  const hasCommentSource = Boolean(
+    normalizedAssets?.normalizedCommentsPath && fs.existsSync(normalizedAssets.normalizedCommentsPath)
+  );
+  const hasSubtitleSource = Boolean(
+    normalizedAssets?.subtitlePaths?.some((file) => fs.existsSync(file))
+  );
   const commentsReady =
-    translation.comments?.status === "skipped" ||
+    (translation.comments?.status === "skipped" && !hasCommentSource) ||
     Boolean(translation.comments?.outputPath && fs.existsSync(translation.comments.outputPath));
   const subtitlesReady =
-    translation.subtitles?.status === "skipped" ||
+    (translation.subtitles?.status === "skipped" && !hasSubtitleSource) ||
     Boolean(translation.subtitles?.outputPaths?.some((file) => fs.existsSync(file)));
   return commentsReady && subtitlesReady;
 }

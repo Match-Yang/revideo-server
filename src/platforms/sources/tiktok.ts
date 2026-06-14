@@ -66,9 +66,21 @@ function normalizeFormat(format: Record<string, unknown>): SourceFormat {
 // ── TikTok-specific ──────────────────────────────────────────
 
 const TIKTOK_ID_RE = /video\/(\d+)/;
+const COMMENT_CAPTURE_TIMEOUT_MS = 120_000;
 
 function extractTikTokId(url: string): string | undefined {
   return url.match(TIKTOK_ID_RE)?.[1];
+}
+
+function canonicalTikTokVideoUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -139,6 +151,11 @@ interface RawTikTokComment {
   reply_comment_total?: number;
 }
 
+interface TikTokCommentFetchResult {
+  comments: Record<string, unknown>[];
+  reason?: string;
+}
+
 function mapTikTokComment(
   raw: RawTikTokComment,
   uploaderId?: string,
@@ -175,11 +192,11 @@ async function fetchTikTokComments(
   uploaderId: string | undefined,
   maxComments: number,
   signal?: AbortSignal,
-): Promise<Record<string, unknown>[]> {
+): Promise<TikTokCommentFetchResult> {
   const status = await startBrowser();
   if (!status.webSocketDebuggerUrl) {
     console.warn("[tiktok] browser not available, skipping comment fetch");
-    return [];
+    return { comments: [], reason: "browser not available" };
   }
 
   const browser = await puppeteer.connect({
@@ -191,6 +208,7 @@ async function fetchTikTokComments(
     const page = await browser.newPage();
     try {
       await page.setViewport({ width: 1280, height: 900 });
+      page.setDefaultTimeout(COMMENT_CAPTURE_TIMEOUT_MS);
 
       // Step 1: Capture the first successful comment API request URL.
       // TikTok's JS generates security tokens (msToken, X-Bogus, etc.)
@@ -209,38 +227,98 @@ async function fetchTikTokComments(
       });
 
       // Step 2: Navigate and click comment button to trigger the first API call
-      await page.goto(videoUrl, {
+      const pageUrl = canonicalTikTokVideoUrl(videoUrl);
+      await page.bringToFront().catch(() => undefined);
+      await page.goto(pageUrl, {
         waitUntil: "domcontentloaded",
-        timeout: 30_000,
+        timeout: COMMENT_CAPTURE_TIMEOUT_MS,
         signal,
       });
-      await new Promise((r) => setTimeout(r, 3_000));
 
-      const clicked = await page.evaluate(() => {
-        const els = document.querySelectorAll("[data-e2e]");
-        for (const el of els) {
-          if ((el.getAttribute("data-e2e") || "").includes("comment")) {
-            (el as HTMLElement).click();
-            return true;
-          }
-        }
-        return false;
-      });
-
-      if (!clicked) {
-        console.warn("[tiktok] comment button not found on page");
-        return [];
-      }
-
-      // Wait for the first API call to fire
-      for (let i = 0; i < 15 && !capturedBaseUrl; i++) {
+      let clickAttempts = 0;
+      let verificationSeen = false;
+      let lastPageState = "";
+      const startedAt = Date.now();
+      while (!capturedBaseUrl && Date.now() - startedAt < COMMENT_CAPTURE_TIMEOUT_MS) {
         if (signal?.aborted) break;
-        await new Promise((r) => setTimeout(r, 1_000));
+        await new Promise((r) => setTimeout(r, 1_500));
+
+        const state = await page.evaluate(() => {
+          const bodyText = document.body?.innerText || "";
+          const hasVerification = /captcha|verify|verification|robot|拼图|滑块|验证|安全检查/i.test(bodyText);
+          if (hasVerification) {
+            return {
+              clicked: [],
+              readyState: document.readyState,
+              title: document.title,
+              url: location.href,
+              commentMarkers: [],
+              loginHint: /log in|login|sign up|登录|注册/i.test(bodyText),
+              verificationHint: true,
+              bodySample: bodyText.slice(0, 180).replace(/\s+/g, " "),
+            };
+          }
+
+          const selectors = [
+            '[data-e2e="comment-icon"]',
+            '[data-e2e="comment-count"]',
+            '[data-e2e*="comment"]',
+            'button[aria-label*="comment" i]',
+            'button[aria-label*="评论" i]',
+          ];
+          const clickedSelectors: string[] = [];
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (el) {
+              clickedSelectors.push(selector);
+              (el as HTMLElement).scrollIntoView({ block: "center", inline: "center" });
+              (el as HTMLElement).click();
+              break;
+            }
+          }
+
+          if (clickedSelectors.length === 0) {
+            const buttons = Array.from(document.querySelectorAll("button, [role='button']"));
+            for (const el of buttons) {
+              const label = `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.toLowerCase();
+              if (label.includes("comment") || label.includes("评论")) {
+                clickedSelectors.push(label.slice(0, 80));
+                (el as HTMLElement).scrollIntoView({ block: "center", inline: "center" });
+                (el as HTMLElement).click();
+                break;
+              }
+            }
+          }
+
+          window.scrollBy({ top: Math.round(window.innerHeight * 0.7), behavior: "instant" });
+          const commentMarkers = Array.from(document.querySelectorAll("[data-e2e], button, [role='button']"))
+            .map((el) => `${el.getAttribute("data-e2e") || ""} ${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.trim())
+            .filter((text) => /comment|评论/i.test(text))
+            .slice(0, 6);
+
+          return {
+            clicked: clickedSelectors,
+            readyState: document.readyState,
+            title: document.title,
+            url: location.href,
+            commentMarkers,
+            loginHint: /log in|login|sign up|登录|注册/i.test(bodyText),
+            verificationHint: false,
+            bodySample: bodyText.slice(0, 180).replace(/\s+/g, " "),
+          };
+        });
+
+        if (state.verificationHint) verificationSeen = true;
+        if (state.clicked.length > 0) clickAttempts += 1;
+        lastPageState = JSON.stringify(state);
       }
 
       if (!capturedBaseUrl) {
-        console.warn("[tiktok] failed to capture comment API URL");
-        return [];
+        const reason = verificationSeen
+          ? `TikTok verification challenge was shown and comment API was not captured after ${Math.round(COMMENT_CAPTURE_TIMEOUT_MS / 1000)}s; solve the challenge in the opened browser and retry; lastPageState=${lastPageState}`
+          : `failed to capture comment API URL after ${Math.round(COMMENT_CAPTURE_TIMEOUT_MS / 1000)}s; clickAttempts=${clickAttempts}; lastPageState=${lastPageState}`;
+        console.warn(`[tiktok] ${reason}`);
+        return { comments: [], reason };
       }
 
       // Step 3: Paginated fetch using the captured URL with security params
@@ -269,8 +347,14 @@ async function fetchTikTokComments(
           }
         }, fetchUrl);
 
-        if ("error" in result || !Array.isArray(result.comments) || result.comments.length === 0) {
-          break;
+        if ("error" in result) {
+          return { comments: allComments, reason: String(result.error) };
+        }
+        if (!Array.isArray(result.comments)) {
+          return { comments: allComments, reason: "comment API returned no comments array" };
+        }
+        if (result.comments.length === 0) {
+          return { comments: allComments, reason: allComments.length > 0 ? undefined : "comment API returned empty list" };
         }
 
         for (const raw of result.comments) {
@@ -285,7 +369,7 @@ async function fetchTikTokComments(
       }
 
       console.log(`[tiktok] fetched ${allComments.length} comments`);
-      return allComments;
+      return { comments: allComments };
     } finally {
       await page.close().catch(() => undefined);
     }
@@ -293,7 +377,7 @@ async function fetchTikTokComments(
     console.warn(
       `[tiktok] comment fetch failed: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return [];
+    return { comments: [], reason: err instanceof Error ? err.message : String(err) };
   } finally {
     browser.disconnect();
   }
@@ -419,17 +503,20 @@ export const tiktokSourceAdapter: SourceAdapter = {
           fs.readFileSync(infoPath, "utf-8"),
         ) as Record<string, unknown>;
         const uploaderId = String(info.uploader_id || "");
+        const expectedCount =
+          typeof info.comment_count === "number" ? info.comment_count : undefined;
         const targetCount = Math.max(
           1,
           request.options.targetCommentCount || 200,
         );
 
-        const comments = await fetchTikTokComments(
+        const commentFetch = await fetchTikTokComments(
           request.url,
           uploaderId,
           targetCount,
           request.signal,
         );
+        const comments = commentFetch.comments;
 
         if (comments.length > 0) {
           info.comments = comments;
@@ -438,10 +525,31 @@ export const tiktokSourceAdapter: SourceAdapter = {
             `[tiktok] injected ${comments.length} comments into info.json`,
           );
         }
+        return {
+          mediaPath,
+          infoPath,
+          subtitlePaths: [],
+          comments: {
+            attempted: true,
+            count: comments.length,
+            expectedCount,
+            reason: comments.length > 0 ? undefined : commentFetch.reason || "no comments fetched",
+          },
+        };
       } catch (err) {
         console.warn(
           `[tiktok] comment injection skipped: ${err instanceof Error ? err.message : String(err)}`,
         );
+        return {
+          mediaPath,
+          infoPath,
+          subtitlePaths: [],
+          comments: {
+            attempted: true,
+            count: 0,
+            reason: err instanceof Error ? err.message : String(err),
+          },
+        };
       }
     }
 
