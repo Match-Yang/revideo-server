@@ -45,6 +45,7 @@ import {
   translateText,
 } from "./translate/openai-compatible";
 import { getSystemHealth } from "./health";
+import { mountMcp } from "./mcp";
 import { calculateTargetCommentCount, defaultRenderDir, loadSettings, saveSettings } from "./settings";
 import type { RevideoSettings } from "./settings";
 import {
@@ -152,8 +153,26 @@ function appendCrashLog(message: string, data?: unknown): void {
   } catch {}
 }
 
+// Errors that stem from a client dropping a connection (e.g. writing to a
+// socket after the peer closed it, such as a dashboard/agent disconnecting
+// mid-SSE or mid file-stream). Harmless for a long-running server — only
+// genuine code bugs should crash the process.
+function isBenignStreamError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: string }).code;
+  return (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ECONNABORTED" ||
+    code === "ECANCELED" ||
+    code === "ENOTCONN"
+  );
+}
+
 process.on("uncaughtException", (err) => {
   appendCrashLog("uncaughtException", err instanceof Error ? { message: err.message, stack: err.stack } : err);
+  // Client went away mid-response — log it but keep serving other requests.
+  if (isBenignStreamError(err)) return;
   throw err;
 });
 
@@ -2165,6 +2184,19 @@ app.post("/api/tasks/cleanup", (_req, res) => {
   }
 });
 
+// ============================================================
+// MCP server — exposes high-level tools to agent clients
+// (e.g. OpenClaw) over a stateless Streamable HTTP transport.
+// Mounted before the GET catch-all so /mcp routes take priority.
+// ============================================================
+mountMcp(app, {
+  createJobFromRequest,
+  enqueueJobRun,
+  defaultRunSteps,
+  snapshotQueue,
+  cancelJobRunsForJob,
+});
+
 app.get(/^(?!\/api\/|\/out\/).*/, (req, res) => {
   const indexPath = path.join(ui_dir, "index.html");
   if (fs.existsSync(indexPath)) {
@@ -2178,6 +2210,7 @@ app.listen(PORT, () => {
   syncRenderStatus();
   recoverInterruptedJobRuns();
   console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
+  console.log(`  MCP 服务:    POST http://localhost:${PORT}/mcp  (供 OpenClaw 等 agent 调用)`);
   console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }`);
   console.log(`  Agent API: POST /api/publish        { "videoPath": "...", "platforms": ["bilibili","douyin"] }`);
   console.log(`  Task API:   GET/POST/PUT/DELETE /api/tasks\n`);
