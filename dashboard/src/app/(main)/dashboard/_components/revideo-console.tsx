@@ -6,6 +6,7 @@ import {
   Activity,
   CheckCircle2,
   ChevronDown,
+  Copy,
   Cpu,
   Download,
   ExternalLink,
@@ -215,6 +216,33 @@ const agentChannels = [
   ["discord", "Discord"],
 ];
 
+// Hand this verbatim to an AI agent (OpenClaw, Hermes, etc.) so it installs the
+// server and wires up the MCP endpoint on its own. Rendered read-only in the
+// Agent settings pane with a copy button.
+const AGENT_INSTRUCTION = `请按以下步骤帮我安装并配置 Revideo 视频搬运服务，完成后告诉我。
+
+1. 安装服务
+Linux / macOS：
+curl -fsSL https://raw.githubusercontent.com/Match-Yang/revideo-server/main/install.sh | bash
+Windows (PowerShell)：
+iex (irm https://raw.githubusercontent.com/Match-Yang/revideo-server/main/install.ps1)
+（脚本会自动安装 Node.js、yt-dlp、ffmpeg 并启动服务，端口 3001）
+
+2. 将 Revideo 接入你的 MCP 配置：
+{
+  "mcpServers": {
+    "revideo": {
+      "url": "http://localhost:3001/mcp"
+    }
+  }
+}
+
+3. 打开 http://localhost:3001 ，在「设置 → LLM」里填好兼容 OpenAI 格式的 URL、模型名和 API Key。
+
+配置完成后，我就能通过 MCP 的 submit_video_job 等工具，自动完成视频下载、翻译、渲染和发布。
+
+项目地址：https://github.com/Match-Yang/revideo-server`;
+
 function getNested<T>(source: unknown, path: string, fallback: T): T {
   const value = path.split(".").reduce<unknown>((acc, key) => {
     if (acc && typeof acc === "object" && key in acc) {
@@ -372,13 +400,6 @@ function parseFieldValue(name: string, value: FormDataEntryValue) {
   // Per-platform retry counts
   if (/^task\.publish\.platformConfigs\.[^.]+\.retryCount$/.test(name)) return Number(raw || 0);
   return raw;
-}
-
-function agentChannel(settings: SettingsShape | null, type: string) {
-  const channels = getNested<JsonValue | undefined>(settings, "agent.channels", undefined);
-  if (!Array.isArray(channels)) return {};
-  const match = channels.find((item) => item && typeof item === "object" && (item as Record<string, JsonValue>).type === type);
-  return match && typeof match === "object" ? match : {};
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -1196,23 +1217,36 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
           </SettingsPane>
 
           <SettingsPane active={activeSettings} id="agent">
-            <SettingsSection title="个人 Agent 连接" description="这里先做 UI 配置，用于未来一键连接 OpenClaw、Hermes、WorkBuddy 等个人 Agent。">
-              <SwitchRow label="启用 Agent" name="agent.enabled" defaultChecked={getNested(settings, "agent.enabled", false)} />
-              <SelectField name="agent.type" label="Agent 类型" defaultValue={getNested(settings, "agent.type", "openclaw")} options={[["openclaw", "OpenClaw"], ["hermes", "Hermes"], ["workbuddy", "WorkBuddy"], ["custom", "自定义"]]} />
-              <SelectField name="agent.connectionMode" label="连接方式" defaultValue={getNested(settings, "agent.connectionMode", "local-app")} options={[["local-app", "本机应用"], ["browser-extension", "浏览器扩展"], ["cloud", "云服务"], ["webhook", "自定义 Webhook"]]} />
-              <SelectField name="agent.handoffMode" label="接管范围" help="只通知最安全；自动处理适合完全信任的个人 Agent。" defaultValue={getNested(settings, "agent.handoffMode", "notify-only")} options={[["notify-only", "只通知"], ["ask-before-action", "询问后处理"], ["auto", "自动处理"]]} />
-              <LabelInput label="Agent Token / 连接密钥" name="agent.token" defaultValue={getNested(settings, "agent.token", "")} className="w-48" />
-            </SettingsSection>
-            <SettingsSection title="IM Channel" description="用户通过哪个 IM 接收通知和发指令。">
-              <div className="grid gap-3">
-                {agentChannels.map(([type, label]) => (
-                  <div key={type} className="rounded-lg border bg-card px-3 py-1">
-                    <SwitchRow label={label} name={`agent.channels.${type}.enabled`} defaultChecked={Boolean(getNested(agentChannel(settings, type), "enabled", false))} />
-                    <LabelInput label="接收人或群" name={`agent.channels.${type}.binding`} defaultValue={getNested(agentChannel(settings, type), "binding", "")} className="w-36" />
-                    <SelectField name={`agent.channels.${type}.notificationLevel`} label="通知级别" defaultValue={getNested(agentChannel(settings, type), "notificationLevel", "failures")} options={[["all", "全部"], ["failures", "只失败"], ["needs-action", "只需要人工处理"]]} />
-                    <SwitchRow label="允许远程操作" name={`agent.channels.${type}.allowRemoteActions`} defaultChecked={Boolean(getNested(agentChannel(settings, type), "allowRemoteActions", false))} />
-                  </div>
-                ))}
+            <SettingsSection title="给 Agent 的配置指令" description="把下面这段话复制后直接发给你的 Agent（OpenClaw、Hermes 等），它会按说明安装服务并配置好 MCP。">
+              <div className="py-3">
+                <div className="relative">
+                  <Textarea
+                    readOnly
+                    value={AGENT_INSTRUCTION}
+                    aria-label="给 Agent 的配置指令"
+                    className="min-h-[360px] resize-none bg-muted/40 font-mono text-xs leading-relaxed"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="absolute top-2 right-2 gap-1"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(AGENT_INSTRUCTION);
+                        toast.success("已复制，直接发给你的 Agent 即可");
+                      } catch {
+                        toast.error("复制失败，请手动选择文本复制");
+                      }
+                    }}
+                  >
+                    <Copy className="size-3.5" />
+                    复制
+                  </Button>
+                </div>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  无需在本地做任何配置——这段指令已包含安装命令和 MCP 接入方式，Agent 收到后即可自行完成。
+                </p>
               </div>
             </SettingsSection>
           </SettingsPane>
