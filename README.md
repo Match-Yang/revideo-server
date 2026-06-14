@@ -81,11 +81,11 @@ npm run lint           # eslint + tsc 类型检查
 
 ## MCP（供 AI agent 接入）
 
-Revideo 内置 MCP（Model Context Protocol）服务，AI agent（如 Claude）可通过它自动化整个搬运流程：提交链接 → 翻译/渲染/生成草稿 → 发布，全程无需手动操作 Dashboard。
+Revideo 内置 MCP（Model Context Protocol）服务，AI agent（如 OpenClaw、Hermes agent等）可通过它自动化整个搬运流程：提交链接 → 翻译/渲染/生成草稿 → 发布，全程无需手动操作 Dashboard。
 
 **端点**：`POST http://localhost:3001/mcp`（无状态 Streamable HTTP 传输）
 
-在 Claude Desktop / Claude Code 的 MCP 配置中加入：
+在 OpenClaw、Hermes agent 等的 MCP 配置中加入：
 
 ```json
 {
