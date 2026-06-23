@@ -15,11 +15,8 @@ public/
 # Rendered output
 out/
 
-# Runtime workflow data
-data/browser/
-data/jobs/
-data/events.jsonl
-data/settings.json
+# Runtime data lives in ~/.revideo-server/data (see src/config.ts), never in-tree
+data/
 
 # Environment
 .env

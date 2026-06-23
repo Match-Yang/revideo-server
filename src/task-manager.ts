@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { DATA_DIR } from "./config";
 import type {
   PublishTask,
   TasksData,
@@ -11,7 +12,7 @@ import type {
   PublishStatus,
 } from "./types";
 
-const TASKS_FILE = path.join(process.cwd(), "data", "tasks.json");
+const TASKS_FILE = path.join(DATA_DIR, "tasks.json");
 const OUT_DIR = path.join(process.cwd(), "out");
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
