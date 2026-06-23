@@ -25,6 +25,27 @@ const YOUTUBE_ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|shorts\/|embed\
 const CHINESE_SUBTITLE_FALLBACKS = ["zh-Hans", "zh-Hant", "zh.*"];
 const ENGLISH_SUBTITLE_FALLBACKS = ["en.*", "en"];
 
+// yt-dlp needs a JS runtime (deno/node) to execute YouTube's player code.
+// Without one, extraction degrades ("some formats may be missing") and, under
+// rate-limiting, can stall the network layer — which is what hung downloads.
+// deno is the default but rarely installed; node is always present here.
+let cachedJsRuntimeArgs: string[] | null = null;
+function jsRuntimeArgs(): string[] {
+  if (cachedJsRuntimeArgs) return cachedJsRuntimeArgs;
+  const override = process.env.YT_DLP_JS_RUNTIME;
+  if (override) {
+    cachedJsRuntimeArgs = ["--js-runtimes", override];
+    return cachedJsRuntimeArgs;
+  }
+  try {
+    // process.execPath is the node binary running this server.
+    cachedJsRuntimeArgs = ["--js-runtimes", `node:${process.execPath}`];
+  } catch {
+    cachedJsRuntimeArgs = [];
+  }
+  return cachedJsRuntimeArgs;
+}
+
 function execFileText(
   command: string,
   args: string[],
@@ -104,18 +125,36 @@ async function downloadSubtitleLanguages(
     "--sleep-subtitles",
     "2",
     "--no-playlist",
+    ...jsRuntimeArgs(),
     "-o",
     subtitleTemplate,
     request.url,
   ];
 
   await execFileText(resolveCommand("yt-dlp"), args, 30 * 60 * 1000, request.signal);
+  // yt-dlp can "succeed" (exit 0) yet write a Google rate-limit/error HTML page
+  // to the .vtt destination instead of real subtitles. Validate the new files
+  // are actual subtitle tracks before treating the download as successful.
   const after = listSubtitleFiles(request.outputDir);
-  const hasNewFile = after.some((file) => !before.has(file));
-  if (!hasNewFile) {
-    console.warn(`[youtube] subtitle download produced no files for ${label}: ${languages.join(",")}`);
+  const newValidFiles = after.filter((file) => {
+    if (before.has(file)) return false;
+    try {
+      const head = fs.readFileSync(file, "utf8").trimStart().slice(0, 512).toLowerCase();
+      const looksLikeSubtitle = head.startsWith("webvtt") || /^\d{2}:\d{2}/.test(head) || /^1\b/.test(head);
+      if (!looksLikeSubtitle) {
+        console.warn(`[youtube] discarding invalid subtitle file (not WEBVTT/SRT): ${path.basename(file)}`);
+        fs.unlinkSync(file);
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (newValidFiles.length === 0) {
+    console.warn(`[youtube] subtitle download produced no valid files for ${label}: ${languages.join(",")}`);
   }
-  return hasNewFile;
+  return newValidFiles.length > 0;
 }
 
 async function tryDownloadSubtitles(request: DownloadRequest): Promise<void> {
@@ -130,23 +169,37 @@ async function tryDownloadSubtitles(request: DownloadRequest): Promise<void> {
       ? nonChineseLanguages.slice(0, 3)
       : ENGLISH_SUBTITLE_FALLBACKS;
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  // Build an ordered list of language groups to try. We attempt Chinese first
+  // (the target language), then fall back to English, then any other language.
+  // Each group is tried at most once — YouTube aggressively rate-limits
+  // (HTTP 429) auto-caption fetches, and retrying the SAME language group just
+  // deepens the throttle. On 429 we immediately move on to the next group so we
+  // still get subtitles in some language instead of giving up entirely.
+  const groups: Array<{ label: string; languages: string[] }> = [
+    { label: "Chinese", languages: primaryLanguages },
+    { label: "fallback", languages: fallbackLanguages },
+  ];
+
+  for (const group of groups) {
     try {
-      if (await downloadSubtitleLanguages(request, primaryLanguages, `Chinese attempt ${attempt}`)) return;
+      if (await downloadSubtitleLanguages(request, group.languages, group.label)) {
+        console.log(`[youtube] subtitles downloaded via ${group.label}: ${group.languages.join(",")}`);
+        return;
+      }
     } catch (err) {
-      console.warn(
-        `[youtube] Chinese subtitle attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[youtube] ${group.label} subtitle attempt failed: ${message}`);
+      const rateLimited = /HTTP Error 429|Too Many Requests/i.test(message);
+      // On 429, don't retry this group — but DO try the next language group
+      // (English/other), which hits a different caption track and is far less
+      // likely to be throttled. Only abort when there's no group left to try.
+      if (rateLimited) {
+        console.warn(`[youtube] ${group.label} rate-limited (429), trying next language group`);
+        continue;
+      }
     }
   }
-
-  try {
-    await downloadSubtitleLanguages(request, fallbackLanguages, "non-Chinese fallback");
-  } catch (err) {
-    console.warn(
-      `[youtube] subtitle fallback skipped: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
+  console.warn("[youtube] all subtitle language groups exhausted, no subtitles downloaded");
 }
 
 function walkFiles(dir: string): string[] {
@@ -224,7 +277,7 @@ export const youtubeSourceAdapter: SourceAdapter = {
   },
 
   async probe(url: string): Promise<SourceProbeResult> {
-    const stdout = await execFileText(resolveCommand("yt-dlp"), ["-J", "--skip-download", url]);
+    const stdout = await execFileText(resolveCommand("yt-dlp"), ["-J", "--skip-download", ...jsRuntimeArgs(), url]);
     const raw = JSON.parse(stdout) as Record<string, unknown>;
     const rawFormats = Array.isArray(raw.formats) ? raw.formats : [];
     const formats = rawFormats.map((format) => normalizeFormat(format as Record<string, unknown>));
@@ -261,6 +314,7 @@ export const youtubeSourceAdapter: SourceAdapter = {
       "--write-info-json",
       "--no-playlist",
       "--no-abort-on-error",
+      ...jsRuntimeArgs(),
       "-o",
       outputTemplate,
     ];
@@ -305,13 +359,30 @@ export const youtubeSourceAdapter: SourceAdapter = {
         break;
       } catch (err) {
         lastError = err;
-        if (request.signal?.aborted || attempt >= maxAttempts) break;
+        const message = err instanceof Error ? err.message : String(err);
+        // 429 rate-limited: retrying immediately makes the throttle worse and
+        // tends to stall yt-dlp's networking layer. Bail out rather than loop.
+        if (/HTTP Error 429|Too Many Requests/i.test(message)) break;
+        // Aborted by caller (pause/cancel): stop immediately, do not retry.
+        if (request.signal?.aborted) break;
+        if (attempt >= maxAttempts) break;
         console.warn(
-          `[youtube] download attempt ${attempt}/${maxAttempts} failed, retrying: ${err instanceof Error ? err.message : String(err)}`
+          `[youtube] download attempt ${attempt}/${maxAttempts} failed, retrying: ${message}`
         );
       }
     }
-    if (lastError) throw lastError;
+    // yt-dlp uses --no-abort-on-error, so it may exit non-zero (e.g. comment
+    // fetch hit 429) while still having written the media file. Only treat the
+    // run as failed if no media file landed on disk.
+    const mediaFileBeforeSubtitles = walkFiles(request.outputDir).find((file) => /\.(mp4|mkv|webm|mov)$/i.test(file));
+    if (lastError && !mediaFileBeforeSubtitles && !request.signal?.aborted) {
+      throw lastError;
+    }
+    if (lastError) {
+      console.warn(
+        `[youtube] yt-dlp reported errors but media file present, continuing: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+      );
+    }
     await tryDownloadSubtitles(request);
 
     const files = walkFiles(request.outputDir);
