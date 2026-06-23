@@ -7,6 +7,7 @@ import type { DirInfo, Comment } from "./types";
 import { scanMoviesDir } from "./scan-dir";
 import { renderFfmpegComments, type CommentRenderStyle, type LineHeightName, type SizeName } from "./renderers/ffmpeg-comments";
 import { prepareSubtitleVttFile } from "./subtitles/wrap";
+import { resolveCommand } from "./dependencies";
 
 export interface RenderConfig {
   style?: CommentRenderStyle;
@@ -390,7 +391,7 @@ export async function renderWithFFmpeg(
     console.log(`[ffmpeg Render] Duration: ${durationSec}s, no filters (original aspect ratio)`);
 
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("ffmpeg", ffmpegArgs, {
+      const proc = spawn(resolveCommand("ffmpeg"), ffmpegArgs, {
         stdio: ["pipe", "pipe", "pipe"],
         cwd: process.cwd(),
       });

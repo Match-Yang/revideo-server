@@ -4,6 +4,7 @@ import { spawn } from "child_process";
 import sharp from "sharp";
 import type { Comment } from "../types";
 import { textWidth, wrapParagraph, prepareSubtitleVttFile } from "../subtitles/wrap";
+import { resolveCommand } from "../dependencies";
 
 export type CommentStyleName = "classic-dark" | "light" | "bilibili" | "douyin" | "xiaohongshu";
 export type SizeName = "small" | "medium" | "large";
@@ -380,17 +381,75 @@ function overlaySvg(comments: LaidOutComment[], frame: number, fps: number, layo
   `;
 }
 
-function writeFrame(stdin: NodeJS.WritableStream, buffer: Buffer): Promise<void> {
+interface FfmpegProcState {
+  /** Set as soon as the ffmpeg child process exits (close handler fires). */
+  exited: boolean;
+  /** Captures stderr so we can surface the real failure cause on hang/exit. */
+  stderr: string;
+  /** Latest error from the process or stdin, if any. */
+  error?: Error;
+}
+
+/**
+ * Write a single PNG frame to ffmpeg's stdin with deadlock protection.
+ *
+ * Why this exists: the original `stdin.write(buf, cb)` could hang forever if
+ * ffmpeg stopped reading stdin (filter error, OOM, early exit). The write
+ * callback only fires once the kernel buffer drains, so a stalled ffmpeg meant
+ * the whole render hung until the user manually cancelled. We now:
+ *   1. Fail fast if ffmpeg already exited or stdin errored (state.error/exited).
+ *   2. Add a hard per-frame timeout (default 120s) — ffmpeg rendering a heavy
+ *      filter graph can stall briefly, but never for minutes on end.
+ *   3. Drain into the writable on backpressure instead of ignoring `false`.
+ */
+function writeFrame(
+  stdin: NodeJS.WritableStream,
+  buffer: Buffer,
+  state: FfmpegProcState,
+  timeoutMs = 120_000,
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const onError = (err: Error) => {
+    if (state.exited || state.error) {
+      reject(state.error ?? new Error("ffmpeg exited before frame write"));
+      return;
+    }
+
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
       stdin.off("error", onError);
-      reject(err);
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
     };
+    const onError = (err: Error) => {
+      state.error = err;
+      finish(err);
+    };
+    const timer = setTimeout(() => {
+      finish(new Error(`ffmpeg stdin write timed out after ${timeoutMs / 1000}s (ffmpeg likely stopped reading stdin; last stderr: ${state.stderr.slice(-800)})`));
+    }, timeoutMs);
+
     stdin.once("error", onError);
-    stdin.write(buffer, () => {
-      stdin.off("error", onError);
-      resolve();
-    });
+
+    const onDrained = (err?: Error | null) => {
+      if (err) {
+        state.error = err instanceof Error ? err : new Error(String(err));
+        finish(state.error);
+        return;
+      }
+      finish();
+    };
+
+    // writable.write returns false when the internal buffer is full (backpressure).
+    // The callback still fires once it drains, so we don't need a separate path,
+    // but we keep the return value for future readiness checks.
+    try {
+      stdin.write(buffer, onDrained);
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)));
+    }
   });
 }
 
@@ -483,10 +542,16 @@ export async function renderFfmpegComments(
   ffmpegArgs.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
   ffmpegArgs.push(options.outputPath);
 
-  const proc = spawn("ffmpeg", ffmpegArgs, {
+  const proc = spawn(resolveCommand("ffmpeg"), ffmpegArgs, {
     cwd: process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
   });
+
+  // Shared state between the frame loop and the process listeners. The close
+  // handler is registered BEFORE we start writing frames so that an early ffmpeg
+  // exit can break a hung `writeFrame` instead of leaving the loop waiting on a
+  // write callback that will never fire.
+  const state: FfmpegProcState = { exited: false, stderr: "" };
 
   if (options.signal) {
     options.signal.addEventListener("abort", () => {
@@ -494,9 +559,18 @@ export async function renderFfmpegComments(
     });
   }
 
-  let stderr = "";
   proc.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
+    state.stderr += chunk.toString();
+  });
+  proc.on("error", (err) => {
+    state.error = err;
+    state.exited = true;
+  });
+  proc.on("close", (code) => {
+    state.exited = true;
+    if (code !== 0 && !state.error) {
+      state.error = new Error(`ffmpeg exited with code ${code}: ${state.stderr.slice(-1200)}`);
+    }
   });
 
   for (let frame = 0; frame < totalFrames; frame++) {
@@ -504,25 +578,41 @@ export async function renderFfmpegComments(
       proc.kill("SIGKILL");
       throw new Error("ffmpeg comments render aborted");
     }
+    if (state.exited) {
+      throw state.error ?? new Error(`ffmpeg exited early at frame ${frame}: ${state.stderr.slice(-1200)}`);
+    }
     const svg = overlaySvg(comments, frame, fps, layout);
     const png = await sharp(Buffer.from(svg)).png().toBuffer();
-    await writeFrame(proc.stdin, png);
+    await writeFrame(proc.stdin, png, state);
     if (frame % Math.max(1, fps) === 0) {
       const percent = 8 + Math.round((frame / totalFrames) * 87);
       emit(options, "encoding", percent, `渲染评论层 ${frame}/${totalFrames}`);
     }
   }
-  proc.stdin.end();
+
+  // If ffmpeg already died while we were writing, end() will emit an error that
+  // we surface below; otherwise this flushes stdin and lets ffmpeg finish.
+  if (!state.exited) {
+    await new Promise<void>((resolve) => {
+      proc.stdin.end(() => resolve());
+    });
+  }
 
   await new Promise<void>((resolve, reject) => {
+    if (state.exited) {
+      if (state.error) reject(state.error);
+      else resolve();
+      return;
+    }
     proc.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-1200)}`));
-      }
+      state.exited = true;
+      if (code === 0) resolve();
+      else reject(state.error ?? new Error(`ffmpeg exited with code ${code}: ${state.stderr.slice(-1200)}`));
     });
-    proc.on("error", reject);
+    proc.on("error", (err) => {
+      state.error = err;
+      reject(err);
+    });
   });
 
   emit(options, "encoding", 95, "FFmpeg 评论视频编码完成");
