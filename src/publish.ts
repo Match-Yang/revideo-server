@@ -226,7 +226,8 @@ async function getCurrentBilibiliCategory(page: Page): Promise<string> {
 async function publishBilibili(
   options: PublishOptions,
   cdpEndpoint: string | undefined,
-  onProgress: (p: PublishProgress) => void
+  onProgress: (p: PublishProgress) => void,
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const { videoPath, coverPath: requestedCoverPath, title, description, tags = [] } = options;
 
@@ -370,40 +371,77 @@ async function publishBilibili(
       }
     }
 
-    // Handle 创作声明 dropdown — B站 now requires selecting a declaration
+    // Handle 创作声明 dropdown — B站 requires selecting a declaration before
+    // publishing. The control lives inside the .statement-main section as a
+    // bcc-select: a readonly <input class="bcc-select-input-inner"> whose
+    // placeholder reads "请选择符合您视频内容的创作声明". Options appear as
+    // .bcc-select-option-list > li when the dropdown opens.
     onProgress({ stage: "filling", percent: 52, message: "正在设置创作声明..." });
     try {
-      const declarationSelected = await page.evaluate(() => {
-        // Find the 创作声明 select input
-        const selectInput = Array.from(document.querySelectorAll('.bcc-select-input-inner'))
-          .find(el => el.getAttribute('placeholder')?.includes('创作声明') && (el as HTMLElement).offsetHeight > 0) as HTMLInputElement | undefined;
-        if (!selectInput) return false;
-        // Check if already has a value selected
-        if (selectInput.getAttribute('readonly') === 'readonly' && selectInput.value && selectInput.value !== '请选择符合您视频内容的创作声明') {
-          return true;
-        }
-        // Click to open the dropdown
-        selectInput.click();
-        return 'clicked';
+      const declarationState = await page.evaluate((): {
+        status: "not-found" | "already-set" | "needs-click";
+        x?: number;
+        y?: number;
+      } => {
+        // Scope to the 创作声明 section so we don't grab an unrelated bcc-select.
+        const section = document.querySelector(".statement-main") || document.body;
+        const selectInput = Array.from(section.querySelectorAll(".bcc-select-input-inner"))
+          .find((el) => {
+            const ph = el.getAttribute("placeholder") || "";
+            return ph.includes("创作声明") && (el as HTMLElement).offsetHeight > 0;
+          }) as HTMLInputElement | undefined;
+        if (!selectInput) return { status: "not-found" };
+        // Already selected? (readonly + non-placeholder value)
+        const val = selectInput.value || "";
+        if (val && !val.includes("请选择")) return { status: "already-set" };
+        // Return the bounding rect of the .bcc-select container so the caller
+        // can dispatch a REAL mouse click. bcc-select's dropdown toggle is bound
+        // on mouse events; a programmatic el.click() does not open it, which was
+        // why the declaration silently went unset.
+        const container = selectInput.closest(".bcc-select") as HTMLElement | null;
+        const target = container || selectInput;
+        // Scroll the control into view first — during the publish flow the form
+        // is long and the declaration section may be below the fold, which makes
+        // a viewport-coordinate click land on the wrong element.
+        target.scrollIntoView({ block: "center" });
+        const rect = target.getBoundingClientRect();
+        return {
+          status: "needs-click",
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+        };
       });
-      if (declarationSelected === 'clicked') {
-        await sleep(1000);
-        // Select the matching declaration option, or fall back to first option
-        await page.evaluate((preferredDeclaration: string) => {
-          const options = Array.from(document.querySelectorAll('.bcc-option'))
-            .filter(el => (el as HTMLElement).offsetHeight > 0) as HTMLElement[];
-          if (options.length === 0) return;
-          const match = preferredDeclaration
-            ? options.find(el => el.textContent?.includes(preferredDeclaration))
+
+      if (declarationState.status === "needs-click") {
+        // Wait for scroll to settle, then real mouse click.
+        await sleep(300);
+        await page.mouse.click(declarationState.x ?? 0, declarationState.y ?? 0);
+        await sleep(1200);
+        // Pick the matching option, else fall back to the first one.
+        // Options render as LI.bcc-option (inside .bcc-select-list-wrap, which
+        // may be portaled outside .statement-main), so query globally. We check
+        // visibility via getBoundingClientRect (width/height > 0) rather than
+        // offsetHeight, which is 0 for elements in some portal containers.
+        const picked = await page.evaluate((preferred: string) => {
+          const allOptions = Array.from(document.querySelectorAll(".bcc-option, li[role='option']"));
+          const visible = allOptions.filter((el): el is HTMLElement => {
+            const r = (el as HTMLElement).getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          });
+          if (visible.length === 0) return { ok: false, total: allOptions.length };
+          const match = preferred
+            ? visible.find((el) => el.textContent?.includes(preferred))
             : undefined;
-          (match || options[0]).click();
+          const chosen = match || visible[0];
+          chosen.click();
+          return { ok: true, total: allOptions.length, value: chosen.textContent?.trim().slice(0, 30) };
         }, options.declaration || "");
         await sleep(500);
-        console.log('[Declaration] 创作声明 set');
-      } else if (declarationSelected) {
-        console.log('[Declaration] Already set');
+        console.log(`[Declaration] 创作声明 ${picked.ok ? `set: ${picked.value}` : `opened but no visible option (total ${picked.total})`}`);
+      } else if (declarationState.status === "already-set") {
+        console.log("[Declaration] Already set");
       } else {
-        console.log('[Declaration] 创作声明 dropdown not found, skipping');
+        console.log("[Declaration] 创作声明 dropdown not found, skipping");
       }
     } catch (e) {
       console.error('[Declaration] Failed to set 创作声明:', e);
@@ -623,9 +661,21 @@ async function publishBilibili(
     // after clicking submit — we must wait until upload finishes and "稿件投递成功" appears.
     onProgress({ stage: "submitting", percent: 75, message: "等待投稿确认..." });
     const SUBMIT_POLL_INTERVAL = 5000;
+    // Hard cap: a normal upload finishes well within 30min. Without this cap the
+    // poll loop ran forever (observed 7+ hours of "state=unknown") when the page
+    // stalled, wedging activeJobRun until the run-level watchdog eventually fired.
+    const SUBMIT_TIMEOUT_MS = 30 * 60 * 1000;
     const submitStart = Date.now();
 
     while (true) {
+      // Honor abort (watchdog timeout / user cancel) so the run can actually stop.
+      if (signal?.aborted) {
+        throw new Error("B站投稿被取消");
+      }
+      if (Date.now() - submitStart > SUBMIT_TIMEOUT_MS) {
+        throw new Error(`B站投稿超时（${SUBMIT_TIMEOUT_MS / 60000}分钟内未确认稿件投递成功）`);
+      }
+
       const state = await page.evaluate(() => {
         const bodyText = document.body.innerText;
         if (bodyText.includes("稿件投递成功")) return "success" as const;
@@ -824,6 +874,9 @@ export interface PublishRequest {
   bilibili?: { title: string; description: string; tags?: string[]; category?: string; declaration?: string };
   douyin?: { title: string; description: string };
   cdpEndpoint?: string;
+  /** Abort signal from the job runner; publish polls check this so a watchdog
+   * timeout or user cancellation actually interrupts the flow. */
+  signal?: AbortSignal;
 }
 
 export async function publish(
@@ -869,7 +922,7 @@ export async function publish(
             ...p,
             percent: basePercent + (p.percent / platforms.length),
           })
-        );
+        , req.signal);
         results.bilibili = { success: true, ...result };
       } else if (platform === "douyin") {
         const opts: PublishOptions = {

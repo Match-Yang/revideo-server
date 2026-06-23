@@ -86,13 +86,14 @@ function createLegacyPublisher(platform: "bilibili" | "douyin", implemented: boo
       };
     },
 
-    async publish(job, force) {
+    async publish(job, force, signal) {
       const target = getTarget(job, platform);
       if (target?.status === "published" && !force) {
         throw new Error(`${platform} is already published. Pass force=true to publish again.`);
       }
 
       const req = buildPublishRequest(job, platform);
+      req.signal = signal;
       const results = await publish(req, () => undefined);
       const result = results[platform] || { success: false, error: "No platform result returned" };
       writeResult(job, platform, result);

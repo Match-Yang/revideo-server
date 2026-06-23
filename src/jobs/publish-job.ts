@@ -61,7 +61,7 @@ export async function preflightJobTarget(job: RevideoJob, platform: TargetPlatfo
   return publisher.preflight(job, { login: checks.login });
 }
 
-export async function publishJobTarget(job: RevideoJob, platform: TargetPlatform, force?: boolean) {
+export async function publishJobTarget(job: RevideoJob, platform: TargetPlatform, force?: boolean, signal?: AbortSignal) {
   const publisher = resolvePublisher(platform);
   if (!publisher) {
     throw new Error(`${platform} publisher not found`);
@@ -73,8 +73,9 @@ export async function publishJobTarget(job: RevideoJob, platform: TargetPlatform
   const maxAttempts = getPublishRetryCount(job, platform) + 1;
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (signal?.aborted) throw new Error(`${platform} 发布被取消`);
     try {
-      return await publisher.publish(job, force);
+      return await publisher.publish(job, force, signal);
     } catch (err) {
       lastError = err;
       if (attempt < maxAttempts) {
