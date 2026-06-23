@@ -5,7 +5,8 @@ import { execFileSync } from "child_process";
 import { getDirs, getDirByName, renderWithFFmpeg } from "./renderer";
 import { scanDir } from "./scan-dir";
 import { publish, type PublishRequest } from "./publish";
-import { SERVER_PORT } from "./config";
+import { DATA_DIR, SERVER_PORT } from "./config";
+import { resolveCommand } from "./dependencies";
 import {
   appendJobEvent,
   getJobEvents,
@@ -116,6 +117,8 @@ interface QueuedJobRun {
   finishedAt?: number;
   error?: string;
   abortController?: AbortController;
+  /** Hard-deadline watchdog timer. Guarantees a hung run releases `activeJobRun`. */
+  watchdogTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface JobRunOptions {
@@ -138,9 +141,14 @@ const pausedJobRunIds = new Set<string>();
 const scheduledPublishRuns = new Map<string, ScheduledPublishRun>();
 let activeJobRun: QueuedJobRun | null = null;
 
+// Hard cap on a single job run. A long video (≈10min) with heavy comment
+// rendering can legitimately take ~30min, so we leave generous headroom while
+// still guaranteeing a wedged run eventually frees the queue. Override via env.
+const JOB_RUN_TIMEOUT_MS = Math.max(5 * 60 * 1000, Number(process.env.REVIDEO_JOB_TIMEOUT_MS) || 90 * 60 * 1000);
+
 const app = express();
 const PORT = SERVER_PORT;
-const CRASH_LOG_FILE = path.join(process.cwd(), "data", "server-crash.log");
+const CRASH_LOG_FILE = path.join(DATA_DIR, "server-crash.log");
 
 app.use(express.json());
 
@@ -224,7 +232,7 @@ function getRenderOutputDir(job: NonNullable<ReturnType<typeof loadJob>>): strin
 
 function probeVideoDurationSec(videoPath: string): number {
   try {
-    const out = execFileSync("ffprobe", [
+    const out = execFileSync(resolveCommand("ffprobe"), [
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=nk=1:nw=1",
@@ -233,6 +241,38 @@ function probeVideoDurationSec(videoPath: string): number {
     return parseFloat(out.toString().trim()) || 0;
   } catch {
     return 0;
+  }
+}
+
+// Verify a rendered file is actually decodable, not just present with a valid
+// container duration. A render killed mid-flight (ffmpeg stdin deadlock, OOM,
+// SIGKILL on restart) can leave an .mp4 whose container metadata reports the
+// expected duration but whose video stream is corrupt (invalid NAL units) —
+// `probeVideoDurationSec` alone happily returns ~587s for such a file, so the
+// recovery path used to reuse it and publish a broken video.
+function isVideoStreamReadable(videoPath: string): boolean {
+  try {
+    // -count_frames decodes a small number of frames; corrupt streams error out.
+    // We only need the first decodable frame to prove the stream is intact, so
+    // cap it cheaply with -vframes.
+    execFileSync(resolveCommand("ffprobe"), [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height,codec_name",
+      "-of", "default=nk=1:nw=1",
+      videoPath,
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    // Additionally confirm ffmpeg can actually decode the first frames — a file
+    // can have a stream header but corrupt NAL units (the exact failure here).
+    execFileSync(resolveCommand("ffmpeg"), [
+      "-v", "error",
+      "-i", videoPath,
+      "-vframes", "1",
+      "-f", "null", "-",
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -247,9 +287,13 @@ function existingRenderResult(job: NonNullable<ReturnType<typeof loadJob>>) {
   const durationSec = Math.max(0, Number(normalized?.durationSec || job.source.metadata?.durationSec || 0)) *
     Math.min(10, Math.max(1, Number(job.options.repeatTimes || 1)));
 
-  // A render killed mid-flight (e.g. by a server restart) leaves a playable but
-  // truncated file. Don't trust it as "completed" — verify the output duration
-  // is close to what was expected, otherwise fall through to a real re-render.
+  // A render killed mid-flight (e.g. by a server restart) can leave a file
+  // whose container reports the expected duration but whose video stream is
+  // corrupt (invalid NAL units from a truncated encode). Validate both the
+  // container duration AND that the stream is actually decodable before
+  // trusting it as "completed" — otherwise we'd reuse and publish a broken file.
+  if (!isVideoStreamReadable(outputPath)) return null;
+
   if (durationSec > 0) {
     const actualDurationSec = probeVideoDurationSec(outputPath);
     if (actualDurationSec <= 0 || actualDurationSec < durationSec * 0.9) return null;
@@ -262,15 +306,23 @@ function existingRenderResult(job: NonNullable<ReturnType<typeof loadJob>>) {
   };
 }
 
+// Strip non-serializable fields (AbortController, watchdog Timeout) before
+// sending a run over the API. JSON.stringify on a Timeout throws "circular
+// structure", which used to 500 the queue endpoint.
+function serializeRun(run: QueuedJobRun) {
+  const { abortController: _ac, watchdogTimer: _wt, ...serializable } = run;
+  return serializable;
+}
+
 function snapshotQueue() {
   return {
-    active: activeJobRun,
-    queued: jobRunQueue,
+    active: activeJobRun ? serializeRun(activeJobRun) : null,
+    queued: jobRunQueue.map(serializeRun),
     scheduled: Array.from(scheduledPublishRuns.values()).map((run) => ({
       jobId: run.jobId,
       runAt: run.runAt,
     })),
-    recent: jobRunHistory.slice(-20).reverse(),
+    recent: jobRunHistory.slice(-20).reverse().map(serializeRun),
   };
 }
 
@@ -419,9 +471,14 @@ function recoverInterruptedJobRuns(): void {
     }
 
     // Re-queue jobs stuck at a non-terminal step (e.g. probing-source with pending status)
-    // after a server restart wiped the in-memory queue.
-    const nonTerminalSteps = ["created", "probing-source", "downloading", "normalizing",
-      "translating", "generating-cover", "rendering-video", "generating-drafts", "preflight-publish", "publishing-targets"];
+    // after a server restart wiped the in-memory queue. Values must match the
+    // JobStep union (src/jobs/types.ts) exactly — earlier versions used shorthands
+    // like "downloading" which never matched, leaving mid-pipeline jobs orphaned.
+    const nonTerminalSteps: JobStep[] = [
+      "created", "probing-source", "downloading-source", "normalizing-assets",
+      "translating-assets", "generating-cover-image", "rendering-video",
+      "generating-platform-drafts", "preflighting-targets", "publishing-targets",
+    ];
     if (nonTerminalSteps.includes(step) && step !== "completed" && step !== "cancelled" && step !== "failed") {
       const stepStatus = job.workflow.steps[step]?.status;
       if (stepStatus !== "running" && stepStatus !== "paused") {
@@ -807,7 +864,7 @@ async function executeJobRun(jobId: string, options: JobRunOptions): Promise<Rec
         }
         target.status = "publishing";
         saveJob(latest);
-        const result = await publishJobTarget(latest, target.platform, Boolean(options.force));
+        const result = await publishJobTarget(latest, target.platform, Boolean(options.force), options.signal);
         target.result = result;
         target.status = result.success ? "published" : "failed";
         if (result.error) target.error = result.error;
@@ -863,6 +920,24 @@ async function processJobRunQueue(): Promise<void> {
     data: { runId: run.id, steps: run.steps },
   });
 
+  // Watchdog: cap each run at JOB_RUN_TIMEOUT_MS so a single hung step (e.g.
+  // ffmpeg stdin deadlock, yt-dlp networking stall) can never permanently wedge
+  // `activeJobRun` and starve every subsequent job in the queue. Aborting the
+  // signal cascades to renderFfmpegComments/yt-dlp which kill their children.
+  const timeoutMs = JOB_RUN_TIMEOUT_MS;
+  run.watchdogTimer = setTimeout(() => {
+    if (run.status !== "running") return;
+    run.error = `Job run exceeded ${Math.round(timeoutMs / 60000)}min hard timeout`;
+    cancelledJobRunIds.add(run.id);
+    run.abortController?.abort();
+    appendJobEvent({
+      jobId: run.jobId,
+      level: "error",
+      message: "Background job run timed out (watchdog)",
+      data: { runId: run.id, timeoutMs },
+    });
+  }, timeoutMs);
+
   try {
     await executeJobRun(run.jobId, {
       steps: run.steps,
@@ -884,7 +959,7 @@ async function processJobRunQueue(): Promise<void> {
     });
   } catch (err) {
     run.status = pausedJobRunIds.has(run.id) ? "paused" : cancelledJobRunIds.has(run.id) ? "cancelled" : "failed";
-    run.error = err instanceof Error ? err.message : String(err);
+    run.error = run.error ?? (err instanceof Error ? err.message : String(err));
     appendJobEvent({
       jobId: run.jobId,
       level: run.status === "failed" ? "error" : "warn",
@@ -897,6 +972,10 @@ async function processJobRunQueue(): Promise<void> {
       data: { runId: run.id, error: run.error },
     });
   } finally {
+    if (run.watchdogTimer) {
+      clearTimeout(run.watchdogTimer);
+      run.watchdogTimer = undefined;
+    }
     run.finishedAt = Date.now();
     cancelledJobRunIds.delete(run.id);
     pausedJobRunIds.delete(run.id);
@@ -1162,7 +1241,7 @@ app.post("/api/jobs", async (req, res) => {
     const force = req.query.force === "true" || body.force === true;
     const result = await createJobFromRequest(body, force);
     const run = enqueueJobRun(result.job.id, { steps: defaultRunSteps(result.job.options.publishAction) });
-    res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
+    res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run: serializeRun(run), queue: snapshotQueue() });
   } catch (err) {
     const status =
       err instanceof Error && err.name === "JobConflict" ? 409 :
@@ -1182,7 +1261,7 @@ app.post("/api/workflows/youtube", async (req, res) => {
     };
     const result = await createJobFromRequest(body, force);
     const run = enqueueJobRun(result.job.id, { steps: defaultRunSteps(result.job.options.publishAction) });
-    res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run, queue: snapshotQueue() });
+    res.status(run.status === "queued" ? 202 : 200).json({ success: true, ...result, run: serializeRun(run), queue: snapshotQueue() });
   } catch (err) {
     const status = err instanceof Error && err.name === "NotImplemented" ? 501 : 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -1244,7 +1323,7 @@ app.post("/api/jobs/:jobId/start", (req, res) => {
     force: Boolean(req.body?.force),
     formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
   });
-  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run, queue: snapshotQueue() });
+  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run: serializeRun(run), queue: snapshotQueue() });
 });
 
 app.post("/api/jobs/:jobId/retry", (req, res) => {
@@ -1262,7 +1341,7 @@ app.post("/api/jobs/:jobId/retry", (req, res) => {
     force: true, // retry always re-renders and re-publishes
     formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
   });
-  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run, queue: snapshotQueue() });
+  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run: serializeRun(run), queue: snapshotQueue() });
 });
 
 app.post("/api/jobs/:jobId/pause", (req, res) => {
@@ -1272,7 +1351,7 @@ app.post("/api/jobs/:jobId/pause", (req, res) => {
     return;
   }
   const run = pauseJobRunsForJob(job.id, "Job paused by user");
-  res.json({ success: true, run, job: loadJob(job.id), queue: snapshotQueue() });
+  res.json({ success: true, run: run ? serializeRun(run) : null, job: loadJob(job.id), queue: snapshotQueue() });
 });
 
 app.post("/api/jobs/:jobId/resume", (req, res) => {
@@ -1288,7 +1367,7 @@ app.post("/api/jobs/:jobId/resume", (req, res) => {
     force: Boolean(req.body?.force),
     formatId: typeof req.body?.formatId === "string" ? req.body.formatId : undefined,
   });
-  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run, queue: snapshotQueue() });
+  res.status(run.status === "queued" ? 202 : 200).json({ success: true, run: serializeRun(run), queue: snapshotQueue() });
 });
 
 app.post("/api/jobs/:jobId/cancel", (req, res) => {
@@ -1305,7 +1384,7 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => {
       message: "Queued background job run cancelled",
       data: { runId: run.id },
     });
-    res.json({ success: true, run, queue: snapshotQueue() });
+    res.json({ success: true, run: serializeRun(run), queue: snapshotQueue() });
     return;
   }
 
@@ -1322,7 +1401,7 @@ app.post("/api/jobs/:jobId/cancel", (req, res) => {
       message: "Cancellation requested for running background job",
       data: { runId: activeJobRun.id },
     });
-    res.json({ success: true, run: activeJobRun, queue: snapshotQueue() });
+    res.json({ success: true, run: serializeRun(activeJobRun), queue: snapshotQueue() });
     return;
   }
 
