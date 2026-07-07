@@ -53,6 +53,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -157,6 +158,15 @@ interface QueueShape {
   queued?: QueueRun[];
   scheduled?: QueueRun[];
   recent?: QueueRun[];
+}
+
+type DiscoveryRunStatus = "success" | "running" | "failed";
+interface DiscoveryRunRecord {
+  lastRunAt: string;
+  lastRunStatus: DiscoveryRunStatus;
+  stats: { scanned: number; hardFiltered: number; deduped: number; llmFiltered: number; created: number };
+  createdJobIds: string[];
+  errors: string[];
 }
 
 const workflowOrder = [
@@ -464,6 +474,8 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState("");
   const [settingsTargetsVersion, setSettingsTargetsVersion] = React.useState(0);
+  const [discoveryRecord, setDiscoveryRecord] = React.useState<DiscoveryRunRecord | null>(null);
+  const [discoveryRunning, setDiscoveryRunning] = React.useState(false);
   const formRef = React.useRef<HTMLFormElement | null>(null);
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Always-fresh ref so debounce timer reads latest settingsTargets
@@ -594,11 +606,13 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
       "task.publish.platformConfigs.tiktok.isAigc",
       "task.publish.platformConfigs.x.isSensitive",
       "agent.enabled",
+      "task.discovery.enabled",
     ]);
 
     data.forEach((value, name) => {
       if (!name.startsWith("task.") && !name.startsWith("llm.") && !name.startsWith("agent.")) return;
       if (name.startsWith("agent.channels.")) return;
+      if (name === "task.discovery.targets") return;
       if (booleanFields.has(name)) return;
       setPath(payload as Record<string, unknown>, name, parseFieldValue(name, value));
     });
@@ -607,6 +621,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
       setPath(payload as Record<string, unknown>, name, data.get(name) === "on");
     });
     setPath(payload as Record<string, unknown>, "task.publish.defaultPlatforms", settingsTargetsRef.current);
+    setPath(payload as Record<string, unknown>, "task.discovery.targets", data.getAll("task.discovery.targets").map((v) => String(v)).filter(Boolean));
     setPath(payload as Record<string, unknown>, "agent.channels", agentChannels.map(([type]) => ({
       type,
       enabled: data.get(`agent.channels.${type}.enabled`) === "on",
@@ -638,6 +653,44 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     if (settingsTargetsVersion === 0) return;
     if (formRef.current) scheduleSave(formRef.current, 300);
   }, [settingsTargetsVersion]);
+
+  // 发现：拉取运行状态。挂载时执行一次，运行中每 5s 轮询，完成后停止轮询。
+  const refreshDiscoveryStatus = React.useCallback(() => {
+    jsonFetch<{ record: DiscoveryRunRecord | null }>("/api/discovery/status")
+      .then((data) => {
+        setDiscoveryRecord(data.record ?? null);
+        setDiscoveryRunning(data.record?.lastRunStatus === "running");
+      })
+      .catch(() => { /* 忽略状态查询失败 */ });
+  }, []);
+
+  React.useEffect(() => {
+    refreshDiscoveryStatus();
+    if (!discoveryRunning) return;
+    const timer = setInterval(refreshDiscoveryStatus, 5000);
+    return () => clearInterval(timer);
+  }, [refreshDiscoveryStatus, discoveryRunning]);
+
+  // 立即执行发现任务。
+  async function runDiscoveryNow() {
+    try {
+      const res = await fetch("/api/discovery/run", { method: "POST" });
+      if (res.status === 409) {
+        toast.error("发现任务正在运行中");
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.error || res.statusText);
+        return;
+      }
+      toast.success("发现任务已启动");
+      setDiscoveryRunning(true);
+      refreshDiscoveryStatus();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   const platformChooser = (value: string[], onChange: React.Dispatch<React.SetStateAction<string[]>>, isSettings = false) => (
     <div className="flex flex-wrap gap-2">
@@ -1122,6 +1175,68 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
             <SettingsSection title="定时" description="每天在该整点触发一次自动发现扫描。">
               <LabelInput label="执行时间（小时）" help="0-23，例如 1 表示每天凌晨 1 点执行。" name="task.discovery.scheduleHour" type="number" min={0} max={23} defaultValue={getNested(settings, "task.discovery.scheduleHour", 1)} className="w-28" />
             </SettingsSection>
+            <SettingsSection title="目标平台" description="命中后创建的任务会自动发布到勾选的平台。">
+              <div className="flex flex-wrap gap-x-6 gap-y-3 py-2.5">
+                {(["bilibili", "douyin", "youtube", "tiktok"] as const).map((platform) => {
+                  const selected = (getNested(settings, "task.discovery.targets", []) as string[]).includes(platform);
+                  return (
+                    <Label key={platform} htmlFor={`discovery-target-${platform}`} className="flex items-center gap-2 font-normal text-sm">
+                      <Checkbox id={`discovery-target-${platform}`} name="task.discovery.targets" value={platform} defaultChecked={selected} />
+                      {platformNames[platform] || platform}
+                    </Label>
+                  );
+                })}
+              </div>
+            </SettingsSection>
+            <SettingsSection title="手动触发" description="立即执行一次发现扫描，无需等待定时任务。">
+              <div className="flex flex-wrap items-center gap-3 py-2.5">
+                <Button type="button" onClick={runDiscoveryNow} disabled={discoveryRunning}>
+                  {discoveryRunning ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+                  立即执行
+                </Button>
+                {discoveryRunning && <span className="text-muted-foreground text-xs">发现任务正在运行中…</span>}
+              </div>
+            </SettingsSection>
+            {discoveryRecord && (
+              <div className="grid gap-3 rounded-lg border bg-card px-4 py-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="font-medium text-sm">最近一次运行</span>
+                  <Badge className={cn(
+                    discoveryRecord.lastRunStatus === "success" && "bg-emerald-600 text-white",
+                    discoveryRecord.lastRunStatus === "running" && "bg-blue-600 text-white",
+                    discoveryRecord.lastRunStatus === "failed" && "bg-destructive text-white",
+                  )}>
+                    {discoveryRecord.lastRunStatus === "success" ? "成功" : discoveryRecord.lastRunStatus === "running" ? "运行中" : "失败"}
+                  </Badge>
+                  {discoveryRecord.lastRunAt && (
+                    <span className="text-muted-foreground text-xs">{new Date(discoveryRecord.lastRunAt).toLocaleString()}</span>
+                  )}
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  扫描 {discoveryRecord.stats.scanned} → 硬过滤 {discoveryRecord.stats.hardFiltered} → 去重 {discoveryRecord.stats.deduped} → LLM 过滤 {discoveryRecord.stats.llmFiltered} → 创建 {discoveryRecord.stats.created}
+                </p>
+                {discoveryRecord.createdJobIds.length > 0 && (
+                  <div className="grid gap-1">
+                    <span className="text-xs text-muted-foreground">创建的任务：</span>
+                    <div className="flex flex-wrap gap-1">
+                      {discoveryRecord.createdJobIds.map((id) => (
+                        <Badge key={id} variant="outline" className="font-mono text-xs">{id}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {discoveryRecord.errors.length > 0 && (
+                  <div className="grid gap-1">
+                    <span className="text-xs text-destructive">错误：</span>
+                    <ul className="grid gap-0.5 text-xs text-destructive">
+                      {discoveryRecord.errors.map((err, idx) => (
+                        <li key={err || `err-${idx}`} className="line-clamp-2">{err}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </SettingsPane>
 
           <SettingsPane active={activeSettings} id="prepare">
