@@ -6,6 +6,7 @@ import {
   Activity,
   CheckCircle2,
   ChevronDown,
+  Compass,
   Copy,
   Cpu,
   Download,
@@ -386,6 +387,9 @@ function parseFieldValue(name: string, value: FormDataEntryValue) {
   if (["task.translation.styleConstraints"].includes(name)) {
     return raw.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
   }
+  if (name === "task.discovery.channels") {
+    return raw.split(/\n/).map((item) => item.trim()).filter(Boolean);
+  }
   const numericFields = new Set([
     "task.download.commentSeconds",
     "task.download.maxComments",
@@ -393,6 +397,12 @@ function parseFieldValue(name: string, value: FormDataEntryValue) {
     "task.download.timeoutSec",
     "task.coverAndCopy.fixedFrameIndex",
     "task.render.repeatTimes",
+    "task.discovery.filters.minViews",
+    "task.discovery.filters.minComments",
+    "task.discovery.filters.maxAgeDays",
+    "task.discovery.shortVideo.maxDurationSec",
+    "task.discovery.shortVideo.repeatTimes",
+    "task.discovery.scheduleHour",
     "llm.timeoutSec",
     "llm.retryCount",
   ]);
@@ -1027,6 +1037,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
         { id: "translation", label: "翻译", icon: Globe },
         { id: "cover", label: "封面与文案", icon: Layers },
         { id: "render", label: "渲染", icon: Play },
+        { id: "discovery", label: "发现", icon: Compass },
         { id: "publish", label: "发布", icon: Send },
       ],
     },
@@ -1083,6 +1094,34 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
               <LabelInput label="下载重试次数" name="task.download.retryCount" type="number" min={0} max={10} defaultValue={getNested(settings, "task.download.retryCount", 2)} className="w-20" />
               <LabelInput label="下载超时秒数" name="task.download.timeoutSec" type="number" min={30} defaultValue={getNested(settings, "task.download.timeoutSec", 600)} className="w-20" />
             </div>
+          </SettingsPane>
+
+          <SettingsPane active={activeSettings} id="discovery">
+            <SettingsSection title="发现" description="自动监控指定频道，按规则筛选后将优质短视频加入任务队列。">
+              <SwitchRow label="启用发现" name="task.discovery.enabled" help="开启后调度器会按设定的定时时间每天自动扫描一次。" defaultChecked={getNested(settings, "task.discovery.enabled", false)} />
+            </SettingsSection>
+            <SettingsSection title="监控频道" description="每行一个频道链接，支持 YouTube / Bilibili 等平台。">
+              <div className="py-2.5">
+                <FieldControl label="频道列表" help="每行填写一个频道主页或视频列表链接。">
+                  <Textarea name="task.discovery.channels" defaultValue={(getNested(settings, "task.discovery.channels", []) as string[]).join("\n")} className="min-h-32 resize-y font-mono text-xs" placeholder={"https://www.youtube.com/@channel\nhttps://space.bilibili.com/123456"} />
+                </FieldControl>
+              </div>
+            </SettingsSection>
+            <SettingsSection title="硬性过滤" description="按播放量、评论数、发布时间等客观指标过滤候选视频。">
+              <LabelInput label="最低播放量" help="低于该播放量的视频直接过滤。" name="task.discovery.filters.minViews" type="number" min={0} defaultValue={getNested(settings, "task.discovery.filters.minViews", 1000)} className="w-28" />
+              <LabelInput label="最低评论数" help="低于该评论数的视频直接过滤。" name="task.discovery.filters.minComments" type="number" min={0} defaultValue={getNested(settings, "task.discovery.filters.minComments", 10)} className="w-28" />
+              <LabelInput label="最大发布天数" help="仅采集最近 N 天内发布的视频。" name="task.discovery.filters.maxAgeDays" type="number" min={1} defaultValue={getNested(settings, "task.discovery.filters.maxAgeDays", 30)} className="w-28" />
+            </SettingsSection>
+            <SettingsSection title="语义过滤" description="由 LLM 根据提示词对候选视频做内容质量与相关性筛选。">
+              <PromptField name="task.discovery.llmPrompt" label="LLM 过滤提示词" defaultValue={getNested(settings, "task.discovery.llmPrompt", "")} />
+            </SettingsSection>
+            <SettingsSection title="渲染参数" description="命中后自动创建任务时使用的渲染参数。">
+              <LabelInput label="短视频最大时长（秒）" help="超过此时长的视频跳过，专注短视频搬运。" name="task.discovery.shortVideo.maxDurationSec" type="number" min={1} defaultValue={getNested(settings, "task.discovery.shortVideo.maxDurationSec", 60)} className="w-28" />
+              <LabelInput label="重复次数" help="命中视频渲染时的内容重复拼接次数。" name="task.discovery.shortVideo.repeatTimes" type="number" min={1} max={10} defaultValue={getNested(settings, "task.discovery.shortVideo.repeatTimes", 3)} className="w-28" />
+            </SettingsSection>
+            <SettingsSection title="定时" description="每天在该整点触发一次自动发现扫描。">
+              <LabelInput label="执行时间（小时）" help="0-23，例如 1 表示每天凌晨 1 点执行。" name="task.discovery.scheduleHour" type="number" min={0} max={23} defaultValue={getNested(settings, "task.discovery.scheduleHour", 1)} className="w-28" />
+            </SettingsSection>
           </SettingsPane>
 
           <SettingsPane active={activeSettings} id="prepare">
