@@ -30,7 +30,7 @@ const ENGLISH_SUBTITLE_FALLBACKS = ["en.*", "en"];
 // rate-limiting, can stall the network layer — which is what hung downloads.
 // deno is the default but rarely installed; node is always present here.
 let cachedJsRuntimeArgs: string[] | null = null;
-function jsRuntimeArgs(): string[] {
+export function jsRuntimeArgs(): string[] {
   if (cachedJsRuntimeArgs) return cachedJsRuntimeArgs;
   const override = process.env.YT_DLP_JS_RUNTIME;
   if (override) {
@@ -46,7 +46,7 @@ function jsRuntimeArgs(): string[] {
   return cachedJsRuntimeArgs;
 }
 
-function execFileText(
+export function execFileText(
   command: string,
   args: string[],
   timeoutMs = 120000,
