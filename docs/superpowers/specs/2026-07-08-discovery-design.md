@@ -131,9 +131,20 @@ export interface DiscoveryOptions {
   signal?: AbortSignal;
 }
 
+export interface DiscoveredVideo {
+  videoId: string;
+  url: string;
+  title: string;
+  durationSec?: number;
+  viewCount?: number;
+  commentCount?: number;
+  publishedAt?: string;         // ISO 日期
+  repeatTimes: number;          // 路由层创建 job 时填入 JobOptions.repeatTimes
+}
+
 export interface DiscoveryResult {
   stats: DiscoveryRunRecord["stats"];
-  createdJobIds: string[];
+  videos: DiscoveredVideo[];    // 过滤后待创建的视频列表（路由层据此创建 job）
   errors: string[];
 }
 
@@ -151,8 +162,9 @@ export async function runDiscovery(options?: DiscoveryOptions): Promise<Discover
 5. **批量 probe**：对去重后剩余的视频调 `probeBatch()`，拿到准确的 view_count / comment_count / upload_date / duration。
 6. **硬过滤（精确）**：用 probe 拿到的准确数据再过一遍 `minViews` / `minComments` / `maxAgeDays`。
 7. **LLM 语义过滤**：若 `llmPrompt` 非空，把剩余视频的 `{ title, viewCount, commentCount, publishedAt }` 打包，调 `translateText()` 让 LLM 按提示词返回保留的 videoId 列表。
-8. **创建任务**：对最终保留的视频调 `createJobFromRequest()`（`force: false`，再次去重防并发），`options.repeatTimes` 按视频时长判断（< `maxDurationSec` 则填 `shortVideo.repeatTimes`，否则用默认 1），`publishAction: "publish"`，`targets` 用配置值。创建后 `enqueueJobRun()` 触发流水线。
-9. **记录结果**：写 `discovery.json`，返回 `DiscoveryResult`。
+8. **返回待创建列表**：`runDiscovery()` **只负责扫描+过滤**，返回最终的 `DiscoveredVideo[]`（含 videoId、url、title、durationSec、元数据、建议的 repeatTimes）。**不**在 discovery 模块内创建 job——因为 `createJobFromRequest()` / `enqueueJobRun()` 是 `server.ts` 的内部函数（未导出），导出它们会污染核心模块边界。
+9. **创建任务（在 server.ts 路由层）**：`POST /api/discovery/run` 的处理函数拿到 `runDiscovery()` 返回的视频列表后，在 server.ts 内部遍历调 `createJobFromRequest({ source: { url, platform: "youtube" }, options: { publishAction: "publish", repeatTimes }, targets })`（`force: false`，再次去重防并发）+ `enqueueJobRun(jobId, ...)`。repeatTimes 按视频时长判断（< `maxDurationSec` 则填 `shortVideo.repeatTimes`，否则用默认 1）。
+10. **记录结果**：路由层把创建结果写入 `discovery.json`，返回给前端。
 
 ### 3.4 关于 `createJobFromRequest` 的重复 probe
 
