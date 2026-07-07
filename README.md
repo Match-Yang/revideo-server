@@ -24,9 +24,9 @@ iex (irm https://raw.githubusercontent.com/Match-Yang/revideo-server/main/instal
 - 安装 Node.js 22+、yt-dlp、ffmpeg/ffprobe（如缺失）
 - 下载对应平台的预编译包
 - 注册系统服务（开机自启）
-- 启动服务，端口 3001
+- 启动服务，端口 6688
 
-安装完成后打开 http://localhost:3001 即可使用 Dashboard。
+安装完成后打开 http://localhost:6688 即可使用 Dashboard。
 
 **卸载：**
 
@@ -61,7 +61,7 @@ npm run build
 npm start
 ```
 
-打开 http://localhost:3001。
+打开 http://localhost:6688。
 
 </details>
 
@@ -69,7 +69,8 @@ npm start
 
 ```console
 npm install
-npm run dev            # API (:3001) + Dashboard 开发服务器
+bash scripts/dev.sh    # API (:6688) + Dashboard 开发服务器（热更新）
+                       # 启动前会自动清理 launchd 服务与端口占用
 npm run build          # 编译 TypeScript → dist/
 npm run lint           # eslint + tsc 类型检查
 ```
@@ -83,7 +84,7 @@ npm run lint           # eslint + tsc 类型检查
 
 Revideo 内置 MCP（Model Context Protocol）服务，AI agent（如 OpenClaw、Hermes agent等）可通过它自动化整个搬运流程：提交链接 → 翻译/渲染/生成草稿 → 发布，全程无需手动操作 Dashboard。
 
-**端点**：`POST http://localhost:3001/mcp`（无状态 Streamable HTTP 传输）
+**端点**：`POST http://localhost:6688/mcp`（无状态 Streamable HTTP 传输）
 
 在 OpenClaw、Hermes agent 等的 MCP 配置中加入：
 
@@ -91,7 +92,7 @@ Revideo 内置 MCP（Model Context Protocol）服务，AI agent（如 OpenClaw�
 {
   "mcpServers": {
     "revideo": {
-      "url": "http://localhost:3001/mcp"
+      "url": "http://localhost:6688/mcp"
     }
   }
 }

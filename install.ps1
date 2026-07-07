@@ -5,7 +5,7 @@
 param(
     [switch]$Uninstall,
     [string]$InstallDir = "$env:USERPROFILE\.revideo-server",
-    [int]$Port = 3001,
+    [int]$Port = 6688,
     [string]$Version = "latest",
     [switch]$NonInteractive
 )

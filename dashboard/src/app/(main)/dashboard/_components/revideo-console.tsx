@@ -226,18 +226,18 @@ Linux / macOS：
 curl -fsSL https://raw.githubusercontent.com/Match-Yang/revideo-server/main/install.sh | bash
 Windows (PowerShell)：
 iex (irm https://raw.githubusercontent.com/Match-Yang/revideo-server/main/install.ps1)
-（脚本会自动安装 Node.js、yt-dlp、ffmpeg 并启动服务，端口 3001）
+（脚本会自动安装 Node.js、yt-dlp、ffmpeg 并启动服务，端口 6688）
 
 2. 将 Revideo 接入你的 MCP 配置：
 {
   "mcpServers": {
     "revideo": {
-      "url": "http://localhost:3001/mcp"
+      "url": "http://localhost:6688/mcp"
     }
   }
 }
 
-3. 打开 http://localhost:3001 ，在「设置 → LLM」里填好兼容 OpenAI 格式的 URL、模型名和 API Key。
+3. 打开 http://localhost:6688 ，在「设置 → LLM」里填好兼容 OpenAI 格式的 URL、模型名和 API Key。
 
 配置完成后，我就能通过 MCP 的 submit_video_job 等工具，自动完成视频下载、翻译、渲染和发布。
 

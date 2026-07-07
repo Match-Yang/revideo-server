@@ -9,7 +9,7 @@ set -euo pipefail
 readonly APP_NAME="revideo-server"
 readonly MIN_NODE_MAJOR=22
 readonly DEFAULT_INSTALL_DIR="$HOME/.revideo-server"
-readonly DEFAULT_PORT=3001
+readonly DEFAULT_PORT=6688
 readonly GITHUB_REPO="${GITHUB_REPO:-Match-Yang/revideo-server}"
 
 # ---------------------------------------------------------------------------
@@ -453,7 +453,28 @@ setup_service_launchd() {
   success "launchd service installed and started"
 }
 
+kill_port() {
+  # Free a TCP port so the service can bind cleanly.
+  local port="$1"
+  local pids
+  pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -n "$pids" ]]; then
+    info "Freeing port ${port} (killing: ${pids//$'\n'/, })..."
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    sleep 1
+    pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+      # shellcheck disable=SC2086
+      kill -9 $pids 2>/dev/null || true
+    fi
+  fi
+}
+
 setup_service() {
+  # Ensure nothing else holds the target port before we bind.
+  kill_port "$PORT"
+
   if [[ "$OS" == "linux" ]] && has_cmd systemctl; then
     setup_service_systemd
   elif [[ "$OS" == "darwin" ]] && has_cmd launchctl; then

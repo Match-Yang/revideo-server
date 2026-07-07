@@ -9,7 +9,7 @@ Revideo Server 是一个视频渲染与发布服务，提供以下功能：
 - **视频发布** — 自动化发布到 B站、抖音
 - **任务管理** — 追踪视频从下载、翻译、渲染到发布的完整生命周期
 
-**基础地址**: `http://localhost:3001`
+**基础地址**: `http://localhost:6688`
 
 **通用约定**:
 - 所有接口使用 JSON 格式（`Content-Type: application/json`）
@@ -31,7 +31,7 @@ GET /api/dirs
 **示例**:
 
 ```bash
-curl http://localhost:3001/api/dirs
+curl http://localhost:6688/api/dirs
 ```
 
 **响应**:
@@ -71,10 +71,10 @@ GET /api/preview/:dirName
 
 ```bash
 # 在浏览器中预览
-open http://localhost:3001/api/preview/my-video-1
+open http://localhost:6688/api/preview/my-video-1
 
 # 下载视频文件
-curl http://localhost:3001/api/preview/my-video-1 -o preview.mp4
+curl http://localhost:6688/api/preview/my-video-1 -o preview.mp4
 ```
 
 ---
@@ -109,7 +109,7 @@ POST /api/render/:dirName
 **示例 — JSON 模式**:
 
 ```bash
-curl -X POST http://localhost:3001/api/render/my-video-1
+curl -X POST http://localhost:6688/api/render/my-video-1
 ```
 
 **成功响应**:
@@ -125,7 +125,7 @@ curl -X POST http://localhost:3001/api/render/my-video-1
 **示例 — SSE 模式**:
 
 ```bash
-curl -N -X POST http://localhost:3001/api/render/my-video-1 \
+curl -N -X POST http://localhost:6688/api/render/my-video-1 \
   -H "Accept: text/event-stream"
 ```
 
@@ -173,7 +173,7 @@ Body: { "folder": "/absolute/path/to/folder" }
 **示例 — JSON 模式**:
 
 ```bash
-curl -X POST http://localhost:3001/api/render-folder \
+curl -X POST http://localhost:6688/api/render-folder \
   -H "Content-Type: application/json" \
   -d '{"folder": "/Users/auto/Movies/my-video-1"}'
 ```
@@ -187,7 +187,7 @@ curl -X POST http://localhost:3001/api/render-folder \
 **示例 — SSE 模式**:
 
 ```bash
-curl -N -X POST http://localhost:3001/api/render-folder \
+curl -N -X POST http://localhost:6688/api/render-folder \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"folder": "/Users/auto/Movies/my-video-1"}'
@@ -232,7 +232,7 @@ POST /api/render-stop
 **示例**:
 
 ```bash
-curl -X POST http://localhost:3001/api/render-stop
+curl -X POST http://localhost:6688/api/render-stop
 ```
 
 **成功响应**:
@@ -286,7 +286,7 @@ POST /api/publish
 **示例 — 发布到 B站**:
 
 ```bash
-curl -X POST http://localhost:3001/api/publish \
+curl -X POST http://localhost:6688/api/publish \
   -H "Content-Type: application/json" \
   -d '{
     "videoPath": "/Users/auto/code/revideo-server/out/my-video-1.mp4",
@@ -312,7 +312,7 @@ curl -X POST http://localhost:3001/api/publish \
 **示例 — 同时发布到多平台（SSE 模式）**:
 
 ```bash
-curl -N -X POST http://localhost:3001/api/publish \
+curl -N -X POST http://localhost:6688/api/publish \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{
@@ -452,7 +452,7 @@ POST /api/tasks
 **示例**:
 
 ```bash
-curl -X POST http://localhost:3001/api/tasks \
+curl -X POST http://localhost:6688/api/tasks \
   -H "Content-Type: application/json" \
   -d '{"originalUrl": "https://www.youtube.com/watch?v=Dt-s1q3K7P0"}'
 ```
@@ -497,7 +497,7 @@ GET /api/tasks
 **示例 — 查询所有任务**:
 
 ```bash
-curl http://localhost:3001/api/tasks
+curl http://localhost:6688/api/tasks
 ```
 
 **响应**:
@@ -532,19 +532,19 @@ curl http://localhost:3001/api/tasks
 **示例 — 按渲染状态过滤**:
 
 ```bash
-curl "http://localhost:3001/api/tasks?status=pending"
+curl "http://localhost:6688/api/tasks?status=pending"
 ```
 
 **示例 — 按平台过滤**:
 
 ```bash
-curl "http://localhost:3001/api/tasks?platform=bilibili"
+curl "http://localhost:6688/api/tasks?platform=bilibili"
 ```
 
 **示例 — 组合过滤**:
 
 ```bash
-curl "http://localhost:3001/api/tasks?platform=douyin&published=false"
+curl "http://localhost:6688/api/tasks?platform=douyin&published=false"
 ```
 
 ---
@@ -560,7 +560,7 @@ GET /api/tasks/:videoId
 **示例**:
 
 ```bash
-curl http://localhost:3001/api/tasks/Dt-s1q3K7P0
+curl http://localhost:6688/api/tasks/Dt-s1q3K7P0
 ```
 
 **响应**:
@@ -631,7 +631,7 @@ PUT /api/tasks/:videoId
 **示例 — 标记下载完成**:
 
 ```bash
-curl -X PUT http://localhost:3001/api/tasks/Dt-s1q3K7P0 \
+curl -X PUT http://localhost:6688/api/tasks/Dt-s1q3K7P0 \
   -H "Content-Type: application/json" \
   -d '{"updates":{"downloadStatus":{"video":true,"subtitles":true,"comments":true}}}'
 ```
@@ -650,7 +650,7 @@ curl -X PUT http://localhost:3001/api/tasks/Dt-s1q3K7P0 \
 **示例 — 标记翻译完成**:
 
 ```bash
-curl -X PUT http://localhost:3001/api/tasks/Dt-s1q3K7P0 \
+curl -X PUT http://localhost:6688/api/tasks/Dt-s1q3K7P0 \
   -H "Content-Type: application/json" \
   -d '{"updates":{"translationStatus":{"subtitles":"not-needed","comments":"translated"}}}'
 ```
@@ -668,7 +668,7 @@ DELETE /api/tasks/:videoId
 **示例**:
 
 ```bash
-curl -X DELETE http://localhost:3001/api/tasks/Dt-s1q3K7P0
+curl -X DELETE http://localhost:6688/api/tasks/Dt-s1q3K7P0
 ```
 
 **成功响应**:
@@ -690,7 +690,7 @@ DELETE /api/tasks
 **示例**:
 
 ```bash
-curl -X DELETE http://localhost:3001/api/tasks
+curl -X DELETE http://localhost:6688/api/tasks
 ```
 
 **响应**:
@@ -719,7 +719,7 @@ GET /api/tasks/stats
 **示例**:
 
 ```bash
-curl http://localhost:3001/api/tasks/stats
+curl http://localhost:6688/api/tasks/stats
 ```
 
 **响应**:
@@ -763,7 +763,7 @@ POST /api/tasks/cleanup
 **示例**:
 
 ```bash
-curl -X POST http://localhost:3001/api/tasks/cleanup
+curl -X POST http://localhost:6688/api/tasks/cleanup
 ```
 
 **响应**:
@@ -789,7 +789,7 @@ curl -X POST http://localhost:3001/api/tasks/cleanup
 import requests
 import json
 
-BASE = "http://localhost:3001"
+BASE = "http://localhost:6688"
 
 # 1. 渲染视频（SSE 进度）
 resp = requests.post(f"{BASE}/api/render-folder",
@@ -831,7 +831,7 @@ print(resp.json())
 ### Node.js — 任务管理
 
 ```javascript
-const BASE = "http://localhost:3001";
+const BASE = "http://localhost:6688";
 
 // 创建任务（任务 ID = 视频 ID，重复创建会自动更新）
 const { task } = await fetch(`${BASE}/api/tasks`, {

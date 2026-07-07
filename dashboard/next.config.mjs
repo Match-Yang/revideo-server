@@ -16,7 +16,7 @@ const nextConfig = {
   // In dev, proxy /api/* to the main backend server so hot reload works end-to-end
   ...(isDev && {
     async rewrites() {
-      const port = process.env.REVIDEO_PORT ?? "3001";
+      const port = process.env.REVIDEO_PORT ?? "6688";
       return [
         { source: "/api/:path*", destination: `http://localhost:${port}/api/:path*` },
       ];

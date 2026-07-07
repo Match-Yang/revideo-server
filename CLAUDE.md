@@ -9,11 +9,9 @@ Revideo Server is a video rendering, translation, and cross-platform republishin
 ## Commands
 
 ```bash
-# Development (runs API on :3001 + dashboard dev server concurrently)
-npm run dev
-
-# API only (no dashboard)
-npm run ui
+# Development (runs API on :6688 + dashboard dev server concurrently, with hot reload).
+# dev.sh first unloads any revideo launchd services and frees ports 6688/3000.
+bash scripts/dev.sh
 
 # Type-check and lint
 npm run lint
@@ -25,9 +23,6 @@ npm run dashboard:build     # static export to dashboard/out/
 # Smoke tests
 npm run test:moderation
 npm run test:translation-batch
-
-# Deploy (uses pm2)
-bash scripts/deploy.sh
 ```
 
 There is no general test suite. The project uses `tsx` to run TypeScript directly — no build step for the server.
@@ -36,7 +31,7 @@ There is no general test suite. The project uses `tsx` to run TypeScript directl
 
 ### Dual-package monorepo
 
-- **Root (`src/`):** Express v5 API server, runs via `tsx src/server.ts` on port 3001 (configurable via `REVIDEO_PORT`).
+- **Root (`src/`):** Express v5 API server, runs via `tsx src/server.ts` on port 6688 (configurable via `REVIDEO_PORT`).
 - **`dashboard/`:** Next.js 16 app with shadcn/ui, static-exported to `dashboard/out/` and served by Express. Uses Biome (not ESLint) for linting. Has its own `package.json`.
 
 ### Job Pipeline

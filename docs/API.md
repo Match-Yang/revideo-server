@@ -1,6 +1,6 @@
 # Revideo Server API
 
-Base URL: `http://localhost:3001`
+Base URL: `http://localhost:6688`
 
 ---
 
@@ -53,7 +53,7 @@ POST /api/jobs
 **示例：**
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs \
+curl -X POST http://localhost:6688/api/jobs \
   -H 'Content-Type: application/json' \
   -d '{"source":{"url":"https://www.youtube.com/shorts/5ovDVjVJ1IA"}}'
 ```
@@ -61,7 +61,7 @@ curl -X POST http://localhost:3001/api/jobs \
 **YouTube 快捷方式：**
 
 ```bash
-curl -X POST http://localhost:3001/api/workflows/youtube \
+curl -X POST http://localhost:6688/api/workflows/youtube \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.youtube.com/shorts/5ovDVjVJ1IA"}'
 ```
@@ -75,7 +75,7 @@ GET /api/jobs
 ```
 
 ```bash
-curl http://localhost:3001/api/jobs
+curl http://localhost:6688/api/jobs
 ```
 
 **响应：** `{ "jobs": [ ...RevideoJob ] }`
@@ -89,7 +89,7 @@ GET /api/jobs/:jobId
 ```
 
 ```bash
-curl http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA
+curl http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA
 ```
 
 **响应：** `{ "success": true, "job": RevideoJob }`
@@ -103,7 +103,7 @@ GET /api/jobs/:jobId/events
 ```
 
 ```bash
-curl http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/events
+curl http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/events
 ```
 
 ---
@@ -117,7 +117,7 @@ GET /api/jobs/:jobId/artifact?path=<相对路径>
 `path` 必须是任务目录内的相对路径。JSON 文件返回解析后的对象，其他文件原样返回。
 
 ```bash
-curl "http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/artifact?path=source/metadata/source.json"
+curl "http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/artifact?path=source/metadata/source.json"
 ```
 
 ---
@@ -131,7 +131,7 @@ DELETE /api/jobs/:jobId
 自动暂停关联的运行后删除。
 
 ```bash
-curl -X DELETE http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA
+curl -X DELETE http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA
 ```
 
 ---
@@ -163,7 +163,7 @@ POST /api/jobs/:jobId/start
 | `formatId` | 指定下载格式 ID |
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/start
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/start
 ```
 
 ---
@@ -177,7 +177,7 @@ POST /api/jobs/:jobId/pause
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/pause
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/pause
 ```
 
 ---
@@ -193,7 +193,7 @@ POST /api/jobs/:jobId/resume
 **请求体（可选）：** 同 start。
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/resume
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/resume
 ```
 
 ---
@@ -207,7 +207,7 @@ POST /api/jobs/:jobId/cancel
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/cancel
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/cancel
 ```
 
 ---
@@ -223,7 +223,7 @@ POST /api/jobs/:jobId/retry
 **请求体（可选）：** 同 start。
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/retry
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/retry
 ```
 
 ---
@@ -246,7 +246,7 @@ POST /api/jobs/:jobId/run
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/run \
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/run \
   -H 'Content-Type: application/json' \
   -d '{"steps":["download","normalize"]}'
 ```
@@ -266,7 +266,7 @@ POST /api/jobs/:jobId/download
 **请求体（可选）：** `{ "formatId": "134" }`
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/download
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/download
 ```
 
 ---
@@ -278,7 +278,7 @@ POST /api/jobs/:jobId/normalize
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/normalize
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/normalize
 ```
 
 ---
@@ -290,7 +290,7 @@ POST /api/jobs/:jobId/translate
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/translate
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/translate
 ```
 
 ---
@@ -302,7 +302,7 @@ POST /api/jobs/:jobId/render
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/render
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/render
 ```
 
 ---
@@ -314,7 +314,7 @@ POST /api/jobs/:jobId/drafts/generate
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/drafts/generate
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/drafts/generate
 ```
 
 ---
@@ -326,7 +326,7 @@ POST /api/jobs/:jobId/preflight-publish
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/preflight-publish
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/preflight-publish
 ```
 
 ---
@@ -353,10 +353,10 @@ POST /api/jobs/:jobId/publish
 
 ```bash
 # 发布到所有目标平台
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/publish
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/publish
 
 # 只发布到 B站
-curl -X POST http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA/publish \
+curl -X POST http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA/publish \
   -H 'Content-Type: application/json' \
   -d '{"platforms":["bilibili"]}'
 ```
@@ -374,7 +374,7 @@ GET /api/jobs/queue
 返回当前活跃任务、排队队列和最近完成记录。
 
 ```bash
-curl http://localhost:3001/api/jobs/queue
+curl http://localhost:6688/api/jobs/queue
 ```
 
 ---
@@ -390,7 +390,7 @@ POST /api/sources/probe
 **请求体：** `{ "url": "https://www.youtube.com/watch?v=xxx" }`
 
 ```bash
-curl -X POST http://localhost:3001/api/sources/probe \
+curl -X POST http://localhost:6688/api/sources/probe \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.youtube.com/shorts/5ovDVjVJ1IA"}'
 ```
@@ -402,7 +402,7 @@ GET /api/download/formats?url=<编码后的URL>
 ```
 
 ```bash
-curl "http://localhost:3001/api/download/formats?url=https%3A%2F%2Fwww.youtube.com%2Fshorts%2F5ovDVjVJ1IA"
+curl "http://localhost:6688/api/download/formats?url=https%3A%2F%2Fwww.youtube.com%2Fshorts%2F5ovDVjVJ1IA"
 ```
 
 ---
@@ -450,7 +450,7 @@ GET /api/browser/login/:platform
 `platform` 可选：`bilibili` `douyin`
 
 ```bash
-curl http://localhost:3001/api/browser/login/bilibili
+curl http://localhost:6688/api/browser/login/bilibili
 ```
 
 ### 打开平台登录页
@@ -460,7 +460,7 @@ POST /api/browser/open-login/:platform
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/browser/open-login/bilibili
+curl -X POST http://localhost:6688/api/browser/open-login/bilibili
 ```
 
 ---
@@ -491,7 +491,7 @@ POST /api/translate/test
 ```
 
 ```bash
-curl -X POST http://localhost:3001/api/translate/test \
+curl -X POST http://localhost:6688/api/translate/test \
   -H 'Content-Type: application/json' \
   -d '{"text":"Hello world","targetLanguage":"zh-CN"}'
 ```
@@ -527,7 +527,7 @@ PUT /api/settings
 **请求体：** 完整的设置对象（与 GET 返回的结构一致）。
 
 ```bash
-curl -X PUT http://localhost:3001/api/settings \
+curl -X PUT http://localhost:6688/api/settings \
   -H 'Content-Type: application/json' \
   -d @settings.json
 ```
@@ -542,12 +542,12 @@ curl -X PUT http://localhost:3001/api/settings \
 
 ```bash
 # 创建并自动执行（下载→标准化→翻译→封面→渲染→草稿→预检→发布）
-curl -X POST http://localhost:3001/api/jobs \
+curl -X POST http://localhost:6688/api/jobs \
   -H 'Content-Type: application/json' \
   -d '{"source":{"url":"https://www.youtube.com/shorts/5ovDVjVJ1IA"}}'
 
 # 查看进度
-curl http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA
+curl http://localhost:6688/api/jobs/youtube_5ovDVjVJ1IA
 ```
 
 ### 手动逐步执行
@@ -556,30 +556,30 @@ curl http://localhost:3001/api/jobs/youtube_5ovDVjVJ1IA
 JOB_ID="youtube_5ovDVjVJ1IA"
 
 # 1. 创建任务（不自动执行）
-curl -X POST http://localhost:3001/api/workflows/youtube \
+curl -X POST http://localhost:6688/api/workflows/youtube \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.youtube.com/shorts/5ovDVjVJ1IA"}'
 
 # 2. 下载
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/download
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/download
 
 # 3. 标准化
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/normalize
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/normalize
 
 # 4. 翻译
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/translate
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/translate
 
 # 5. 渲染
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/render
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/render
 
 # 6. 生成草稿
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/drafts/generate
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/drafts/generate
 
 # 7. 发布预检
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/preflight-publish
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/preflight-publish
 
 # 8. 发布
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/publish
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/publish
 ```
 
 ### 暂停 / 恢复 / 删除
@@ -588,13 +588,13 @@ curl -X POST http://localhost:3001/api/jobs/$JOB_ID/publish
 JOB_ID="youtube_5ovDVjVJ1IA"
 
 # 暂停
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/pause
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/pause
 
 # 恢复
-curl -X POST http://localhost:3001/api/jobs/$JOB_ID/resume
+curl -X POST http://localhost:6688/api/jobs/$JOB_ID/resume
 
 # 删除
-curl -X DELETE http://localhost:3001/api/jobs/$JOB_ID
+curl -X DELETE http://localhost:6688/api/jobs/$JOB_ID
 ```
 
 ### 批量暂停/恢复
@@ -603,13 +603,13 @@ curl -X DELETE http://localhost:3001/api/jobs/$JOB_ID
 
 ```bash
 # 暂停所有运行中的任务
-curl -s http://localhost:3001/api/jobs | python3 -c "
+curl -s http://localhost:6688/api/jobs | python3 -c "
 import json, sys, subprocess
 jobs = json.load(sys.stdin)['jobs']
 for j in jobs:
     step = j.get('workflow',{}).get('currentStep','')
     if step in ('downloading-source','normalizing-assets','translating-assets','rendering-video','publishing-targets'):
-        subprocess.run(['curl','-s','-X','POST',f'http://localhost:3001/api/jobs/{j[\"id\"]}/pause'])
+        subprocess.run(['curl','-s','-X','POST',f'http://localhost:6688/api/jobs/{j[\"id\"]}/pause'])
         print(f'paused {j[\"id\"]}')
 "
 ```
