@@ -62,6 +62,22 @@ export interface RevideoSettings {
       repeatTimes: number;
       outputFormat: "mp4" | "mov";
     };
+    discovery: {
+      enabled: boolean;
+      channels: string[];
+      filters: {
+        minViews: number;
+        minComments: number;
+        maxAgeDays: number;
+      };
+      llmPrompt: string;
+      targets: TargetPlatform[];
+      shortVideo: {
+        maxDurationSec: number;
+        repeatTimes: number;
+      };
+      scheduleHour: number;
+    };
     publish: {
       defaultPlatforms: TargetPlatform[];
       platformConfigs: {
@@ -219,6 +235,22 @@ export const defaultSettings: RevideoSettings = {
       longCommentBehavior: "wrap",
       repeatTimes: 1,
       outputFormat: "mp4",
+    },
+    discovery: {
+      enabled: false,
+      channels: [],
+      filters: {
+        minViews: 1000,
+        minComments: 10,
+        maxAgeDays: 30,
+      },
+      llmPrompt: "",
+      targets: [],
+      shortVideo: {
+        maxDurationSec: 60,
+        repeatTimes: 3,
+      },
+      scheduleHour: 1,
     },
     publish: {
       defaultPlatforms: ["bilibili"],
