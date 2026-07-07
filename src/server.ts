@@ -63,6 +63,15 @@ import {
   syncRenderStatus,
 } from "./task-manager";
 import type { AddTaskRequest, TaskFilter } from "./types";
+import { runDiscovery } from "./discovery/discover";
+import { startDiscoveryScheduler } from "./discovery/scheduler";
+import {
+  loadDiscoveryRecord,
+  saveDiscoveryRecord,
+  markRunning,
+  emptyStats,
+} from "./discovery/store";
+import type { DiscoveryRunRecord } from "./discovery/types";
 
 const DEFAULT_SOURCE_PLATFORM = "auto";
 const DUPLICATE_JOB_STRATEGY = "block";
@@ -985,6 +994,68 @@ async function processJobRunQueue(): Promise<void> {
   }
 }
 
+// 发现功能：重入锁，防止定时触发与手动触发撞车
+let discoveryRunning = false;
+
+/**
+ * 执行发现流程并创建 job。被定时调度器和手动触发 API 共用。
+ * 写入 discovery.json 运行记录。
+ */
+async function executeDiscoveryRun(): Promise<void> {
+  if (discoveryRunning) {
+    console.log("[discovery] already running, skip");
+    return;
+  }
+  discoveryRunning = true;
+  markRunning();
+  const errors: string[] = [];
+  const createdJobIds: string[] = [];
+  try {
+    const result = await runDiscovery();
+    errors.push(...result.errors);
+    const cfg = loadSettings().task.discovery;
+    // 创建 job（路由层负责，复用 createJobFromRequest + enqueueJobRun）
+    for (const video of result.videos) {
+      try {
+        const { job } = await createJobFromRequest({
+          source: { url: video.url, platform: "youtube" },
+          options: { publishAction: "publish", repeatTimes: video.repeatTimes },
+          targets: cfg.targets.map((platform) => ({ platform })),
+        });
+        enqueueJobRun(job.id);
+        createdJobIds.push(job.id);
+      } catch (err) {
+        if (err instanceof Error && err.name === "JobConflict") {
+          // 并发去重冲突，跳过
+          continue;
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`创建任务失败 ${video.url}: ${msg}`);
+      }
+    }
+    const record: DiscoveryRunRecord = {
+      lastRunAt: new Date().toISOString(),
+      lastRunStatus: "success",
+      stats: { ...result.stats, created: createdJobIds.length },
+      createdJobIds,
+      errors,
+    };
+    saveDiscoveryRecord(record);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`发现流程异常: ${msg}`);
+    saveDiscoveryRecord({
+      lastRunAt: new Date().toISOString(),
+      lastRunStatus: "failed",
+      stats: emptyStats(),
+      createdJobIds,
+      errors,
+    });
+  } finally {
+    discoveryRunning = false;
+  }
+}
+
 function enqueueJobRun(
   jobId: string,
   options: { steps?: string[]; force?: boolean; formatId?: string } = {}
@@ -1270,6 +1341,22 @@ app.post("/api/workflows/youtube", async (req, res) => {
 
 app.get("/api/jobs", (_req, res) => {
   res.json({ jobs: listJobs() });
+});
+
+// 发现：手动触发
+app.post("/api/discovery/run", (_req, res) => {
+  if (discoveryRunning) {
+    return res.status(409).json({ success: false, error: "发现任务正在运行中" });
+  }
+  // 异步执行，立即返回
+  void executeDiscoveryRun();
+  res.json({ success: true, message: "发现任务已启动" });
+});
+
+// 发现：查询运行状态
+app.get("/api/discovery/status", (_req, res) => {
+  const record = loadDiscoveryRecord();
+  res.json({ success: true, record });
 });
 
 app.get("/api/jobs/queue", (_req, res) => {
@@ -2312,6 +2399,7 @@ app.get(/^(?!\/api\/|\/out\/).*/, (req, res) => {
 app.listen(PORT, () => {
   syncRenderStatus();
   recoverInterruptedJobRuns();
+  startDiscoveryScheduler(executeDiscoveryRun);
   console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
   console.log(`  MCP 服务:    POST http://localhost:${PORT}/mcp  (供 OpenClaw 等 agent 调用)`);
   console.log(`  Agent API: POST /api/render-folder  { "folder": "/path/to/video/folder" }`);
