@@ -41,3 +41,22 @@ export function markRunning(): void {
     errors: [],
   });
 }
+
+/**
+ * 服务启动时恢复：若上次记录停在 running（进程被 kill 导致没正常结束），
+ * 判定为中断，重置为 failed，避免前端永远转圈。
+ * staleMs: 超过此时长（默认 1 小时）的 running 视为僵尸。
+ */
+export function recoverStaleDiscovery(staleMs: number = 60 * 60 * 1000): void {
+  const record = loadDiscoveryRecord();
+  if (!record || record.lastRunStatus !== "running") return;
+  const age = Date.now() - new Date(record.lastRunAt).getTime();
+  if (age > staleMs) {
+    saveDiscoveryRecord({
+      ...record,
+      lastRunStatus: "failed",
+      errors: [...record.errors, "进程中断，发现任务未完成"],
+    });
+    console.log("[discovery] 重置了上次中断的 running 记录");
+  }
+}

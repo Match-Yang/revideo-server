@@ -69,6 +69,7 @@ import {
   loadDiscoveryRecord,
   saveDiscoveryRecord,
   markRunning,
+  recoverStaleDiscovery,
   emptyStats,
 } from "./discovery/store";
 import type { DiscoveryRunRecord } from "./discovery/types";
@@ -2399,6 +2400,7 @@ app.get(/^(?!\/api\/|\/out\/).*/, (req, res) => {
 app.listen(PORT, () => {
   syncRenderStatus();
   recoverInterruptedJobRuns();
+  recoverStaleDiscovery();
   startDiscoveryScheduler(executeDiscoveryRun);
   console.log(`\n  视频渲染服务已启动: http://localhost:${PORT}`);
   console.log(`  MCP 服务:    POST http://localhost:${PORT}/mcp  (供 OpenClaw 等 agent 调用)`);
