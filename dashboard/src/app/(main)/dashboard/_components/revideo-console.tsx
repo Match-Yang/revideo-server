@@ -1213,7 +1213,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
                   )}
                 </div>
                 <p className="text-muted-foreground text-xs">
-                  扫描 {discoveryRecord.stats.scanned} → 硬过滤 {discoveryRecord.stats.hardFiltered} → 去重 {discoveryRecord.stats.deduped} → LLM 过滤 {discoveryRecord.stats.llmFiltered} → 创建 {discoveryRecord.stats.created}
+                  扫描 {discoveryRecord.stats.scanned} → 去重 {discoveryRecord.stats.deduped} → 硬过滤 {discoveryRecord.stats.hardFiltered} → LLM 过滤 {discoveryRecord.stats.llmFiltered} → 创建 {discoveryRecord.stats.created}
                 </p>
                 {discoveryRecord.createdJobIds.length > 0 && (
                   <div className="grid gap-1">
