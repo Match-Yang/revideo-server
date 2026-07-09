@@ -44,19 +44,37 @@ export async function probeBatch(
   const concurrency = Math.max(1, options?.concurrency ?? 3);
   const delayMs = Math.max(0, options?.delayMs ?? 500);
   const signal = options?.signal;
+  const shouldStop = options?.shouldStop;
   const results: SourceProbeResult[] = [];
   let index = 0;
+  let done = 0;
+  const total = urls.length;
+  const t0 = Date.now();
+  let stopped = false;
 
   async function worker() {
-    while (index < urls.length) {
+    while (index < urls.length && !stopped) {
       if (signal?.aborted) return;
       const current = index++;
       const url = urls[current];
       try {
         const probed = await youtubeSourceAdapter.probe(url);
         results.push(probed);
+        // 每完成一个，询问调用方是否可以提前停止
+        if (shouldStop?.(probed, done, total)) {
+          stopped = true;
+          console.log(`[probeBatch] 调用方要求提前停止（已完成 ${done}/${total}）`);
+          return;
+        }
       } catch (err) {
         console.error(`[probeBatch] probe failed: ${url}`, err);
+      }
+      done++;
+      // 每 10 个打印一次进度
+      if (done % 10 === 0 || done === total) {
+        const elapsed = Math.round((Date.now() - t0) / 1000);
+        const rate = elapsed > 0 ? (done / elapsed).toFixed(1) : "?";
+        console.log(`[probeBatch] 进度 ${done}/${total}（${elapsed}s，${rate}/s）`);
       }
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
     }

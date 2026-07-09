@@ -50,4 +50,10 @@ export interface ProbeBatchOptions {
   concurrency?: number;
   delayMs?: number;
   signal?: AbortSignal;
+  /** 每完成一个 probe 后调用，返回 true 则提前终止剩余 probe（用于按时间窗口截断）。 */
+  shouldStop?: (
+    probe: import("../platforms/types").SourceProbeResult,
+    done: number,
+    total: number,
+  ) => boolean;
 }

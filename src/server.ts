@@ -1011,10 +1011,26 @@ async function executeDiscoveryRun(): Promise<void> {
   markRunning();
   const errors: string[] = [];
   const createdJobIds: string[] = [];
+  // 渐进式更新 discovery.json，让前端能看到实时进度
+  const baseRecord = (): DiscoveryRunRecord => ({
+    lastRunAt: new Date().toISOString(),
+    lastRunStatus: "running",
+    stats: emptyStats(),
+    createdJobIds,
+    errors,
+  });
   try {
-    const result = await runDiscovery();
+    console.log("[discovery] === 开始执行发现流程 ===");
+    const result = await runDiscovery(undefined, {
+      onProgress: (partial, stage) => {
+        const record = baseRecord();
+        Object.assign(record.stats, partial);
+        saveDiscoveryRecord(record);
+      },
+    });
     errors.push(...result.errors);
     const cfg = loadSettings().task.discovery;
+    console.log(`[discovery] 开始创建 ${result.videos.length} 个任务...`);
     // 创建 job（路由层负责，复用 createJobFromRequest + enqueueJobRun）
     for (const video of result.videos) {
       try {
