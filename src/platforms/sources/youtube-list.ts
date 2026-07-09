@@ -1,5 +1,5 @@
 import { resolveCommand } from "../../dependencies";
-import { execFileText, jsRuntimeArgs, youtubeSourceAdapter } from "./youtube";
+import { execFileText, jsRuntimeArgs, cookiesArgs, youtubeSourceAdapter } from "./youtube";
 import type { ChannelVideoEntry, ProbeBatchOptions } from "../../discovery/types";
 import type { SourceProbeResult } from "../types";
 
@@ -12,12 +12,29 @@ export async function listChannelVideos(
   channelUrl: string,
   signal?: AbortSignal,
 ): Promise<ChannelVideoEntry[]> {
-  const stdout = await execFileText(
-    resolveCommand("yt-dlp"),
-    ["--flat-playlist", "-J", "--skip-download", ...jsRuntimeArgs(), channelUrl],
-    undefined,
-    signal,
-  );
+  const baseArgs = ["--flat-playlist", "-J", "--skip-download", ...jsRuntimeArgs()];
+  const cookieArgs = cookiesArgs();
+  let stdout: string;
+  try {
+    if (cookieArgs.length === 0) throw new Error("no cookies file");
+    stdout = await execFileText(
+      resolveCommand("yt-dlp"),
+      [...baseArgs, ...cookieArgs, channelUrl],
+      undefined,
+      signal,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("no cookies file")) {
+      console.warn(`[listChannelVideos] with cookies failed, retrying without: ${msg.split("\n")[0]}`);
+    }
+    stdout = await execFileText(
+      resolveCommand("yt-dlp"),
+      [...baseArgs, channelUrl],
+      undefined,
+      signal,
+    );
+  }
   const raw = JSON.parse(stdout) as { entries?: Array<Record<string, unknown>> };
   const entries = Array.isArray(raw.entries) ? raw.entries : [];
   const result: ChannelVideoEntry[] = [];

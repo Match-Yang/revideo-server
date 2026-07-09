@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { resolveCommand } from "../../dependencies";
 import type {
@@ -61,6 +62,26 @@ export function execFileText(
       resolve(stdout);
     });
   });
+}
+
+/**
+ * YouTube cookies 文件路径。yt-dlp 用它绕过 "Sign in to confirm you're not a bot" 风控。
+ * 默认 ~/Downloads/youtube.com_cookies.txt，可用 YT_DLP_COOKIES 环境变量覆盖。
+ * 文件不存在时返回 null（调用方自行决定是否带 cookies）。
+ */
+let cachedCookiesFile: string | null | undefined;
+export function cookiesFile(): string | null {
+  if (cachedCookiesFile !== undefined) return cachedCookiesFile;
+  const explicit = process.env.YT_DLP_COOKIES;
+  const candidate = explicit && explicit.length > 0 ? explicit : path.join(os.homedir(), "Downloads", "youtube.com_cookies.txt");
+  cachedCookiesFile = fs.existsSync(candidate) ? candidate : null;
+  return cachedCookiesFile;
+}
+
+/** 返回 yt-dlp 的 --cookies 参数；无 cookies 文件时返回空数组。 */
+export function cookiesArgs(): string[] {
+  const file = cookiesFile();
+  return file ? ["--cookies", file] : [];
 }
 
 export function extractYoutubeId(url: string): string | undefined {
@@ -126,6 +147,7 @@ async function downloadSubtitleLanguages(
     "2",
     "--no-playlist",
     ...jsRuntimeArgs(),
+    ...cookiesArgs(),
     "-o",
     subtitleTemplate,
     request.url,
@@ -277,7 +299,23 @@ export const youtubeSourceAdapter: SourceAdapter = {
   },
 
   async probe(url: string): Promise<SourceProbeResult> {
-    const stdout = await execFileText(resolveCommand("yt-dlp"), ["-J", "--skip-download", ...jsRuntimeArgs(), url]);
+    // 优先带 cookies（绕过 YouTube bot 风控）；失败则回退到不带 cookies。
+    const baseArgs = ["-J", "--skip-download", ...jsRuntimeArgs()];
+    let stdout: string;
+    try {
+      const cookieArgs = cookiesArgs();
+      if (cookieArgs.length === 0) throw new Error("no cookies file");
+      stdout = await execFileText(resolveCommand("yt-dlp"), [...baseArgs, ...cookieArgs, url]);
+    } catch (err) {
+      // cookies 缺失或过期（报 "Sign in" / "not a bot"），回退到无 cookies 模式
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("no cookies file")) {
+        // 无 cookies 文件，直接无 cookies 探测
+      } else {
+        console.warn(`[youtube] probe with cookies failed, retrying without: ${msg.split("\n")[0]}`);
+      }
+      stdout = await execFileText(resolveCommand("yt-dlp"), [...baseArgs, url]);
+    }
     const raw = JSON.parse(stdout) as Record<string, unknown>;
     const rawFormats = Array.isArray(raw.formats) ? raw.formats : [];
     const formats = rawFormats.map((format) => normalizeFormat(format as Record<string, unknown>));
@@ -315,6 +353,7 @@ export const youtubeSourceAdapter: SourceAdapter = {
       "--no-playlist",
       "--no-abort-on-error",
       ...jsRuntimeArgs(),
+      ...cookiesArgs(),
       "-o",
       outputTemplate,
     ];
