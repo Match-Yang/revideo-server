@@ -457,6 +457,9 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
   const [jobs, setJobs] = React.useState<RevideoJob[]>([]);
   const [queue, setQueue] = React.useState<QueueShape>({ active: null, queued: [], scheduled: [], recent: [] });
   const [settings, setSettings] = React.useState<SettingsShape | null>(null);
+  // settings 首次加载完成时 +1，用作 form 的 key 强制重新挂载，让所有非受控字段
+  //（defaultValue）能正确回填。后续轮询更新不再变 key，避免用户输入丢失。
+  const [settingsFormKey, setSettingsFormKey] = React.useState(0);
   const [browser, setBrowser] = React.useState<BrowserStatus | null>(null);
   const [health, setHealth] = React.useState<HealthStatus | null>(null);
   const [selectedJobId, setSelectedJobId] = React.useState("");
@@ -500,6 +503,8 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     setSettingsTargets(defaults);
     setSelectedJobId((current) => current || jobsRes.jobs?.[0]?.id || "");
     setLoading(false);
+    // 首次加载完成，触发 form 重新挂载以回填 defaultValue
+    setSettingsFormKey((k) => (k === 0 ? 1 : k));
     if (showToast) toast.success(t("actions.dashboardRefreshed"));
   }, [t]);
 
@@ -1105,6 +1110,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
 
   const settingsPanel = (
     <form
+      key={settingsFormKey}
       ref={formRef}
       className="grid gap-4"
       onSubmit={(e) => e.preventDefault()}
