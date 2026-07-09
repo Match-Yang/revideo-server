@@ -473,7 +473,7 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
   const [repeatTimes, setRepeatTimes] = React.useState(1);
   const [createTargets, setCreateTargets] = React.useState<string[]>(["bilibili"]);
   const [settingsTargets, setSettingsTargets] = React.useState<string[]>(["bilibili"]);
-  const [activeSettings, setActiveSettings] = React.useState("download");
+  const [activeSettings, setActiveSettings] = React.useState("discovery");
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState("");
   const [settingsTargetsVersion, setSettingsTargetsVersion] = React.useState(0);
@@ -1090,12 +1090,12 @@ export function RevideoConsole({ view }: { view: DashboardView }) {
     {
       group: "任务流程",
       items: [
+        { id: "discovery", label: "发现", icon: Compass },
         { id: "download", label: "下载与存储", icon: Download },
         { id: "prepare", label: "素材整理与适配", icon: SlidersHorizontal },
         { id: "translation", label: "翻译", icon: Globe },
         { id: "cover", label: "封面与文案", icon: Layers },
         { id: "render", label: "渲染", icon: Play },
-        { id: "discovery", label: "发现", icon: Compass },
         { id: "publish", label: "发布", icon: Send },
       ],
     },
