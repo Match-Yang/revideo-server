@@ -35,10 +35,11 @@ export interface RevideoSettings {
 }
 export interface LlmSettings { provider: string; api_base: string; api_key: string; text_model: string; vision_model: string; temperature: number; timeout_secs: number }
 export interface TaskSettings {
+  task_data_dir?: string;
   discovery: DiscoverySettings; download: DownloadSettings; prepare: PrepareSettings;
   translation: TranslationSettings; cover: CoverSettings; render: RenderSettings; publish: PublishSettings;
 }
-export interface DiscoverySettings { enabled: boolean; run_hour: number; channels: string[]; min_views: number; min_comments: number; max_age_days: number; semantic_filter_prompt: string; max_duration_sec: number; repeat_times: number }
+export interface DiscoverySettings { enabled: boolean; run_hour: number; channels: string[]; min_views: number; min_comments: number; max_age_days: number; semantic_filter_prompt: string; max_duration_sec: number; repeat_times: number; targets: string[] }
 export interface DownloadSettings { cookies_path?: string; js_runtime?: string; video_quality: string; max_comments: number; retry_count: number; timeout_sec: number; comment_seconds: number }
 export interface PrepareSettings { output_aspect: string; output_resolution: string; fit_mode: FitMode; subtitle_cleanup: boolean }
 export interface TranslationSettings { target_language: string; subtitle_mode: TranslationMode; comment_mode: TranslationMode; bilingual_subtitles: boolean; sensitive_content: SensitiveContentMode; style_constraints: string; subtitle_prompt_override: string; comment_prompt_override: string }

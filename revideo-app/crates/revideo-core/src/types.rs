@@ -164,12 +164,13 @@ pub struct AgentSettings { #[serde(default)] pub instruction: String }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSettings {
+    #[serde(default)] pub task_data_dir: Option<String>,
     #[serde(default)] pub discovery: DiscoverySettings, #[serde(default)] pub download: DownloadSettings,
     #[serde(default)] pub prepare: PrepareSettings, #[serde(default)] pub translation: TranslationSettings,
     #[serde(default)] pub cover: CoverSettings, #[serde(default)] pub render: RenderSettings,
     #[serde(default)] pub publish: PublishSettings,
 }
-impl Default for TaskSettings { fn default() -> Self { Self { discovery: Default::default(), download: Default::default(), prepare: Default::default(), translation: Default::default(), cover: Default::default(), render: Default::default(), publish: Default::default() } } }
+impl Default for TaskSettings { fn default() -> Self { Self { task_data_dir: None, discovery: Default::default(), download: Default::default(), prepare: Default::default(), translation: Default::default(), cover: Default::default(), render: Default::default(), publish: Default::default() } } }
 
 // ── Task sub-settings ────────────────────────────────────────────────
 
@@ -179,9 +180,9 @@ pub struct DiscoverySettings {
     #[serde(default)] pub channels: Vec<String>, #[serde(default)] pub min_views: u64,
     #[serde(default)] pub min_comments: u64, #[serde(default)] pub max_age_days: u32,
     #[serde(default)] pub semantic_filter_prompt: String, #[serde(default)] pub max_duration_sec: u32,
-    #[serde(default)] pub repeat_times: u32,
+    #[serde(default)] pub repeat_times: u32, #[serde(default)] pub targets: Vec<String>,
 }
-impl Default for DiscoverySettings { fn default() -> Self { Self { enabled: false, run_hour: 8, channels: vec![], min_views: 0, min_comments: 0, max_age_days: 7, semantic_filter_prompt: String::new(), max_duration_sec: 600, repeat_times: 0 } } }
+impl Default for DiscoverySettings { fn default() -> Self { Self { enabled: false, run_hour: 8, channels: vec![], min_views: 0, min_comments: 0, max_age_days: 7, semantic_filter_prompt: String::new(), max_duration_sec: 600, repeat_times: 0, targets: vec![] } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadSettings {

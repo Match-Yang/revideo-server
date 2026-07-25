@@ -50,6 +50,8 @@ import {
   SettingsSection,
   SettingRow,
   CoverCopyPane,
+  PathField,
+  FieldControl,
 } from "@/components/settings";
 import type { RevideoSettings } from "@/lib/types";
 
@@ -1601,6 +1603,28 @@ export default function RevideoConsole({
                       )}
                     />
                   </div>
+                  <div className="space-y-2">
+                    <FieldControl label={t("settings.discoveryTargets")} help={t("settings.discoveryTargetsDescription")}>
+                      <div className="flex flex-wrap gap-3">
+                        {["bilibili", "douyin", "youtube", "tiktok"].map((p) => (
+                          <label key={p} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={((settings?.task?.discovery as any)?.targets ?? []).includes(p)}
+                              onChange={(e) => {
+                                const current = ((settings?.task?.discovery as any)?.targets ?? []) as string[];
+                                const next = e.target.checked
+                                  ? [...current, p]
+                                  : current.filter((x) => x !== p);
+                                onChange("task.discovery.targets", next);
+                              }}
+                            />
+                            <span>{platformNames[p] ?? p}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </FieldControl>
+                  </div>
                   <div className="flex items-center gap-2">
                     <Button
                       type="button"
@@ -1631,6 +1655,15 @@ export default function RevideoConsole({
                 description="Video quality and comment scraping."
               >
                 <div className="space-y-3">
+                  <PathField
+                    label={t("settings.taskDataDir")}
+                    help={t("settings.taskDataDirDescription")}
+                    name="task.task_data_dir"
+                    defaultValue={getNested(
+                      settings,
+                      "task.task_data_dir",
+                    )}
+                  />
                   <SelectField
                     label="Video Quality"
                     name="task.download.video_quality"
@@ -1676,6 +1709,24 @@ export default function RevideoConsole({
                     step={0.5}
                     value={String((settings?.task?.download as unknown as Record<string, unknown>)?.comment_seconds ?? 2)}
                     onChange={(e) => onChange("task.download.comment_seconds", parseFloat(e.target.value) || 2)}
+                  />
+                  <PathField
+                    label={t("settings.cookiesPath")}
+                    help={t("settings.cookiesPathDescription")}
+                    name="task.download.cookies_path"
+                    defaultValue={getNested(
+                      settings,
+                      "task.download.cookies_path",
+                    )}
+                  />
+                  <PathField
+                    label={t("settings.jsRuntime")}
+                    help={t("settings.jsRuntimeDescription")}
+                    name="task.download.js_runtime"
+                    defaultValue={getNested(
+                      settings,
+                      "task.download.js_runtime",
+                    )}
                   />
                 </div>
               </SettingsSection>
@@ -1865,6 +1916,12 @@ export default function RevideoConsole({
                       "task.render.output_dir",
                     )}
                   />
+                  <LabelInput
+                    label={t("settings.renderTemplate")}
+                    help={t("settings.renderTemplateDescription")}
+                    value={(settings?.task?.render as any)?.template ?? ""}
+                    onChange={(v) => onChange("task.render.template", v)}
+                  />
                   <SwitchRow
                     label="Render Comments"
                     name="task.render.render_comments"
@@ -1976,6 +2033,21 @@ export default function RevideoConsole({
                 title="Publish"
                 description="Per-platform publishing configuration."
               >
+                <LabelInput
+                  label={t("settings.publishMaxRetries")}
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={String((settings?.task?.publish as any)?.max_retries ?? 3)}
+                  onChange={(e) => onChange("task.publish.max_retries", parseInt(String((e as any).target?.value ?? e)) || 0)}
+                />
+                <LabelInput
+                  label={t("settings.publishRetryDelay")}
+                  type="number"
+                  min={1}
+                  value={String((settings?.task?.publish as any)?.retry_delay_secs ?? 30)}
+                  onChange={(e) => onChange("task.publish.retry_delay_secs", parseInt(String((e as any).target?.value ?? e)) || 0)}
+                />
                 <Tabs defaultValue="bilibili">
                   <TabsList className="flex-wrap">
                     {publishPlatforms.map((p) => (

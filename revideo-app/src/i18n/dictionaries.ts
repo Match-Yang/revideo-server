@@ -268,6 +268,24 @@ export const dictionaries = {
       privacyFriends: "互关好友",
       privacyFollowers: "粉丝",
       privacySelf: "仅自己",
+      // G1: task data dir
+      taskDataDir: "任务数据缓存位置",
+      taskDataDirDescription: "下载文件和任务数据的存储目录",
+      // G2: discovery targets
+      discoveryTargets: "发现目标平台",
+      discoveryTargetsDescription: "发现视频后自动创建任务的目标平台",
+      // G5: cookies path
+      cookiesPath: "Cookies 文件路径",
+      cookiesPathDescription: "浏览器导出的 cookies.txt 文件",
+      // G6: js runtime
+      jsRuntime: "JS 运行时路径",
+      jsRuntimeDescription: "可选，指定 Node.js 或 Deno 路径",
+      // G7: render template
+      renderTemplate: "渲染模板",
+      renderTemplateDescription: "视频渲染模板名称",
+      // G8/G9: publish retries
+      publishMaxRetries: "全局最大重试次数",
+      publishRetryDelay: "重试延迟（秒）",
     },
     status: {
       created: "已创建",
@@ -574,6 +592,24 @@ export const dictionaries = {
       privacyFriends: "Mutual followers",
       privacyFollowers: "Followers",
       privacySelf: "Self only",
+      // G1: task data dir
+      taskDataDir: "Task data cache directory",
+      taskDataDirDescription: "Storage directory for downloads and job data",
+      // G2: discovery targets
+      discoveryTargets: "Discovery targets",
+      discoveryTargetsDescription: "Target platforms for auto-created jobs",
+      // G5: cookies path
+      cookiesPath: "Cookies file path",
+      cookiesPathDescription: "Browser-exported cookies.txt file",
+      // G6: js runtime
+      jsRuntime: "JS runtime path",
+      jsRuntimeDescription: "Optional, specify Node.js or Deno path",
+      // G7: render template
+      renderTemplate: "Render template",
+      renderTemplateDescription: "Video render template name",
+      // G8/G9: publish retries
+      publishMaxRetries: "Max publish retries",
+      publishRetryDelay: "Retry delay (seconds)",
     },
     status: {
       created: "created",
