@@ -56,15 +56,6 @@ import type { RevideoSettings } from "@/lib/types";
 
 type DashboardView = "jobs" | "publishing" | "health" | "settings";
 
-const languages = [
-  "zh-CN", "en", "ja", "ko", "es", "fr", "de", "ru",
-];
-
-const styleConstraintOptions = [
-  "自然口语", "保守直译", "短视频口吻", "新闻解说", "专业测评",
-  "夸张吸睛", "幽默吐槽", "克制高级", "本土化表达", "保留原文语气",
-  "适合 B 站", "适合抖音", "适合小红书", "适合 YouTube",
-];
 
 const RES_OPTS: Array<[string, string]> = [
   ["auto", "自动"], ["best", "最高清"], ["1080p", "1080p"],
@@ -1443,7 +1434,7 @@ export default function RevideoConsole({
             {activeSettings === "discovery" && (
               <SettingsSection
                 title="Discovery"
-                desc="Auto-scan channels for new content."
+                description="Auto-scan channels for new content."
               >
                 <div className="space-y-3">
                   <SwitchRow
@@ -1568,7 +1559,7 @@ export default function RevideoConsole({
             {activeSettings === "download" && (
               <SettingsSection
                 title="Download"
-                desc="Video quality and comment scraping."
+                description="Video quality and comment scraping."
               >
                 <div className="space-y-3">
                   <SelectField
@@ -1616,7 +1607,7 @@ export default function RevideoConsole({
             {activeSettings === "prepare" && (
               <SettingsSection
                 title="Prepare"
-                desc="Output aspect ratio, resolution, and fit mode."
+                description="Output aspect ratio, resolution, and fit mode."
               >
                 <div className="space-y-3">
                   <SelectField
@@ -1678,7 +1669,7 @@ export default function RevideoConsole({
             {activeSettings === "translation" && (
               <SettingsSection
                 title="Translation"
-                desc="Language, modes, style, and prompt overrides."
+                description="Language, modes, style, and prompt overrides."
               >
                 <div className="space-y-3">
                   <LabelInput
@@ -1771,7 +1762,7 @@ export default function RevideoConsole({
             {activeSettings === "cover" && (
               <SettingsSection
                 title="Cover"
-                desc="Cover image generation with templates."
+                description="Cover image generation with templates."
               >
                 <CoverCopyPane
                   settings={settings as unknown as Record<string, unknown>}
@@ -1785,7 +1776,7 @@ export default function RevideoConsole({
             {activeSettings === "render" && (
               <SettingsSection
                 title="Render"
-                desc="Video rendering and output settings."
+                description="Video rendering and output settings."
               >
                 <div className="space-y-3">
                   <LabelInput
@@ -1872,7 +1863,7 @@ export default function RevideoConsole({
             {activeSettings === "publish" && (
               <SettingsSection
                 title="Publish"
-                desc="Per-platform publishing configuration."
+                description="Per-platform publishing configuration."
               >
                 <Tabs defaultValue="bilibili">
                   <TabsList className="flex-wrap">
@@ -1944,7 +1935,7 @@ export default function RevideoConsole({
             {activeSettings === "llm" && (
               <SettingsSection
                 title="LLM"
-                desc="OpenAI-compatible API configuration."
+                description="OpenAI-compatible API configuration."
               >
                 <div className="space-y-3">
                   <WideLabelInput
@@ -1991,7 +1982,7 @@ export default function RevideoConsole({
             {activeSettings === "agent" && (
               <SettingsSection
                 title="Agent"
-                desc="AI agent instruction for MCP integration."
+                description="AI agent instruction for MCP integration."
               >
                 <div className="grid gap-2">
                   <div className="flex items-center justify-between">
