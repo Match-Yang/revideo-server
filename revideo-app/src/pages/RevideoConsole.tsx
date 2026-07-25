@@ -48,6 +48,7 @@ import {
   SwitchRow,
   PromptField,
   SettingsSection,
+  SettingRow,
   CoverCopyPane,
 } from "@/components/settings";
 import type { RevideoSettings } from "@/lib/types";
@@ -86,6 +87,52 @@ iex (irm https://raw.githubusercontent.com/Match-Yang/revideo-server/main/instal
 
 项目地址：https://github.com/Match-Yang/revideo-server`;
 
+
+// ── Platform-specific publish option constants ──
+
+const BILIBILI_CATEGORIES = [
+  "影视", "娱乐", "音乐", "舞蹈", "动画", "绘画", "鬼畜", "游戏", "资讯", "知识",
+  "人工智能", "科技数码", "汽车", "时尚美妆", "家装房产", "户外潮流", "健身", "体育运动",
+  "手工", "美食", "小剧场", "旅游出行", "三农", "动物", "亲子", "健康", "情感",
+  "vlog", "生活兴趣", "生活经验",
+];
+
+const BILIBILI_DECLARATIONS = [
+  "内容无需标注", "含AI生成内容", "含虚构演绎内容", "内容含营销信息",
+  "个人观点仅供参考", "内容为转载", "内容为自制：未经作者允许禁止转载",
+];
+
+const VISIBILITY_COMMON = [
+  ["公开", "visibilityPublic"],
+  ["仅自己", "visibilityPrivate"],
+] as const;
+
+const VISIBILITY_FRIENDS = [
+  ["公开", "visibilityPublic"],
+  ["好友可见", "visibilityFriends"],
+  ["仅自己", "visibilityPrivate"],
+] as const;
+
+const YOUTUBE_VISIBILITY = [
+  ["public", "visibilityPublic"],
+  ["unlisted", "visibilityUnlisted"],
+  ["private", "visibilityPrivate"],
+] as const;
+
+const TIKTOK_PRIVACY = [
+  ["PUBLIC_TO_EVERYONE", "privacyEveryone"],
+  ["MUTUAL_FOLLOW_FRIENDS", "privacyFriends"],
+  ["FOLLOWER_OF_CREATOR", "privacyFollowers"],
+  ["SELF_ONLY", "privacySelf"],
+] as const;
+
+const LINE_HEIGHT_OPTS: Array<[string, string]> = [
+  ["compact", "compact"], ["standard", "standard"], ["loose", "loose"],
+];
+
+const LONG_COMMENT_OPTS: Array<[string, string]> = [
+  ["wrap", "wrap"], ["truncate", "truncate"], ["shrink", "shrink"],
+];
 const workflowOrder = [
   "probing-source", "downloading-source", "normalizing-assets",
   "translating-assets", "moderating-assets",
@@ -93,7 +140,7 @@ const workflowOrder = [
   "generating-platform-drafts", "preflighting-targets", "publishing-targets",
 ];
 
-const publishPlatforms = ["bilibili", "douyin", "xiaohongshu", "youtube", "tiktok"];
+const publishPlatforms = ["bilibili", "douyin", "xiaohongshu", "youtube", "tiktok", "instagram", "x"];
 const targetPlatforms = [
   "bilibili", "douyin", "xiaohongshu", "youtube", "tiktok", "instagram", "x",
 ];
@@ -516,6 +563,28 @@ export default function RevideoConsole({
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveSettingsRef.current();
   }, []);
+
+
+  // ── Controlled settings onChange (deep-set + debounced save) ─────
+  function onChange(path: string, value: unknown) {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const next = JSON.parse(JSON.stringify(prev)) as RevideoSettings;
+      const keys = path.split(".");
+      let cur: Record<string, unknown> = next as unknown as Record<string, unknown>;
+      for (let i = 0; i < keys.length - 1; i++) {
+        if (cur[keys[i]] == null || typeof cur[keys[i]] !== "object") {
+          cur[keys[i]] = {};
+        }
+        cur = cur[keys[i]] as Record<string, unknown>;
+      }
+      cur[keys[keys.length - 1]] = value;
+      invoke("update_settings", { partial: next }).catch((e: unknown) =>
+        console.error("Save failed:", e),
+      );
+      return next;
+    });
+  }
 
   // ── Discovery ─────────────────────────────────────────────────────────
   async function runDiscoveryNow() {
@@ -1599,6 +1668,15 @@ export default function RevideoConsole({
                       "task.download.timeout_sec",
                     )}
                   />
+                  <LabelInput
+                    label={t("settings.secondsPerComment")}
+                    help={t("settings.secondsPerCommentDescription")}
+                    type="number"
+                    min={0.5}
+                    step={0.5}
+                    value={String((settings?.task?.download as unknown as Record<string, unknown>)?.comment_seconds ?? 2)}
+                    onChange={(e) => onChange("task.download.comment_seconds", parseFloat(e.target.value) || 2)}
+                  />
                 </div>
               </SettingsSection>
             )}
@@ -1855,6 +1933,39 @@ export default function RevideoConsole({
                       ["summary", "Summary"],
                     ]}
                   />
+                  <SettingRow label={t("settings.commentLineHeight")} help={t("settings.lineHeightDescription")}>
+                    <div className="w-36">
+                      <select
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        value={String((settings?.task?.render as unknown as Record<string, unknown>)?.comment_line_height ?? "standard")}
+                        onChange={(e) => onChange("task.render.comment_line_height", e.target.value)}
+                      >
+                        {LINE_HEIGHT_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    </div>
+                  </SettingRow>
+                  <SettingRow label={t("settings.subtitleLineHeight")} help={t("settings.lineHeightDescription")}>
+                    <div className="w-36">
+                      <select
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        value={String((settings?.task?.render as unknown as Record<string, unknown>)?.subtitle_line_height ?? "standard")}
+                        onChange={(e) => onChange("task.render.subtitle_line_height", e.target.value)}
+                      >
+                        {LINE_HEIGHT_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    </div>
+                  </SettingRow>
+                  <SettingRow label={t("settings.longCommentBehavior")}>
+                    <div className="w-36">
+                      <select
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        value={String((settings?.task?.render as unknown as Record<string, unknown>)?.long_comment_behavior ?? "wrap")}
+                        onChange={(e) => onChange("task.render.long_comment_behavior", e.target.value)}
+                      >
+                        {LONG_COMMENT_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                    </div>
+                  </SettingRow>
                 </div>
               </SettingsSection>
             )}
@@ -1925,6 +2036,206 @@ export default function RevideoConsole({
                           `task.publish.platforms.${p}.tags_prompt`,
                         )}
                       />
+                      <LabelInput
+                        label={t("settings.retryCount")}
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={String(((settings?.task?.publish?.platforms as unknown as Record<string, Record<string, unknown>>)?.[p])?.retry_count ?? 1)}
+                        onChange={(e) => onChange(`task.publish.platforms.${p}.retry_count`, parseInt(e.target.value) || 0)}
+                      />
+                      {p === "bilibili" && (
+                        <>
+                          <SettingRow label={t("settings.bilibiliCategory")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.bilibili?.extra as Record<string, string>)?.category ?? "汽车")}
+                                onChange={(e) => onChange("task.publish.platforms.bilibili.extra.category", e.target.value)}
+                              >
+                                {BILIBILI_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <SettingRow label={t("settings.bilibiliDeclaration")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.bilibili?.extra as Record<string, string>)?.declaration ?? "内容为转载")}
+                                onChange={(e) => onChange("task.publish.platforms.bilibili.extra.declaration", e.target.value)}
+                              >
+                                {BILIBILI_DECLARATIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <LabelInput
+                            label={t("settings.bilibiliTags")}
+                            value={String((settings?.task?.publish?.platforms?.bilibili?.extra as Record<string, string>)?.tags ?? "")}
+                            onChange={(e) => onChange("task.publish.platforms.bilibili.extra.tags", e.target.value)}
+                          />
+                        </>
+                      )}
+                      {p === "douyin" && (
+                        <>
+                          <SettingRow label={t("settings.douyinDeclarationType")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.douyin?.extra as Record<string, string>)?.declaration_type ?? "转载")}
+                                onChange={(e) => onChange("task.publish.platforms.douyin.extra.declaration_type", e.target.value)}
+                              >
+                                {["转载", "原创"].map((v) => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <SettingRow label={t("settings.douyinVisibility")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.douyin?.extra as Record<string, string>)?.visibility ?? "公开")}
+                                onChange={(e) => onChange("task.publish.platforms.douyin.extra.visibility", e.target.value)}
+                              >
+                                {VISIBILITY_FRIENDS.map(([v]) => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <LabelInput
+                            label={t("settings.douyinTopics")}
+                            value={String((settings?.task?.publish?.platforms?.douyin?.extra as Record<string, string>)?.topics ?? "")}
+                            onChange={(e) => onChange("task.publish.platforms.douyin.extra.topics", e.target.value)}
+                          />
+                        </>
+                      )}
+                      {p === "xiaohongshu" && (
+                        <>
+                          <SettingRow label={t("settings.xiaohongshuVisibility")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.xiaohongshu?.extra as Record<string, string>)?.visibility ?? "公开")}
+                                onChange={(e) => onChange("task.publish.platforms.xiaohongshu.extra.visibility", e.target.value)}
+                              >
+                                {VISIBILITY_COMMON.map(([v]) => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <LabelInput
+                            label={t("settings.xiaohongshuTopics")}
+                            value={String((settings?.task?.publish?.platforms?.xiaohongshu?.extra as Record<string, string>)?.topics ?? "")}
+                            onChange={(e) => onChange("task.publish.platforms.xiaohongshu.extra.topics", e.target.value)}
+                          />
+                        </>
+                      )}
+                      {p === "youtube" && (
+                        <>
+                          <LabelInput
+                            label={t("settings.youtubeCategory")}
+                            value={String((settings?.task?.publish?.platforms?.youtube?.extra as Record<string, string>)?.category ?? "Autos & Vehicles")}
+                            onChange={(e) => onChange("task.publish.platforms.youtube.extra.category", e.target.value)}
+                          />
+                          <SettingRow label={t("settings.youtubeVisibility")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.youtube?.extra as Record<string, string>)?.visibility ?? "private")}
+                                onChange={(e) => onChange("task.publish.platforms.youtube.extra.visibility", e.target.value)}
+                              >
+                                {YOUTUBE_VISIBILITY.map(([v]) => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <LabelInput
+                            label={t("settings.youtubeTags")}
+                            value={String((settings?.task?.publish?.platforms?.youtube?.extra as Record<string, string>)?.tags ?? "")}
+                            onChange={(e) => onChange("task.publish.platforms.youtube.extra.tags", e.target.value)}
+                          />
+                        </>
+                      )}
+                      {p === "tiktok" && (
+                        <>
+                          <SettingRow label={t("settings.tiktokPrivacy")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.tiktok?.extra as Record<string, string>)?.privacy ?? "SELF_ONLY")}
+                                onChange={(e) => onChange("task.publish.platforms.tiktok.extra.privacy", e.target.value)}
+                              >
+                                {TIKTOK_PRIVACY.map(([v]) => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <SettingRow label={t("settings.tiktokAllowComment")}>
+                            <Switch
+                              checked={(settings?.task?.publish?.platforms?.tiktok?.extra as Record<string, boolean>)?.allow_comment ?? true}
+                              onCheckedChange={(v) => onChange("task.publish.platforms.tiktok.extra.allow_comment", v)}
+                            />
+                          </SettingRow>
+                          <SettingRow label={t("settings.tiktokAllowDuet")}>
+                            <Switch
+                              checked={(settings?.task?.publish?.platforms?.tiktok?.extra as Record<string, boolean>)?.allow_duet ?? false}
+                              onCheckedChange={(v) => onChange("task.publish.platforms.tiktok.extra.allow_duet", v)}
+                            />
+                          </SettingRow>
+                          <SettingRow label={t("settings.tiktokAllowStitch")}>
+                            <Switch
+                              checked={(settings?.task?.publish?.platforms?.tiktok?.extra as Record<string, boolean>)?.allow_stitch ?? false}
+                              onCheckedChange={(v) => onChange("task.publish.platforms.tiktok.extra.allow_stitch", v)}
+                            />
+                          </SettingRow>
+                          <SettingRow label={t("settings.tiktokIsAigc")}>
+                            <Switch
+                              checked={(settings?.task?.publish?.platforms?.tiktok?.extra as Record<string, boolean>)?.is_aigc ?? false}
+                              onCheckedChange={(v) => onChange("task.publish.platforms.tiktok.extra.is_aigc", v)}
+                            />
+                          </SettingRow>
+                        </>
+                      )}
+                      {p === "instagram" && (
+                        <>
+                          <SettingRow label={t("settings.instagramVisibility")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.instagram?.extra as Record<string, string>)?.visibility ?? "private")}
+                                onChange={(e) => onChange("task.publish.platforms.instagram.extra.visibility", e.target.value)}
+                              >
+                                {["public", "private"].map((v) => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <LabelInput
+                            label={t("settings.instagramHashtags")}
+                            value={String((settings?.task?.publish?.platforms?.instagram?.extra as Record<string, string>)?.hashtags ?? "")}
+                            onChange={(e) => onChange("task.publish.platforms.instagram.extra.hashtags", e.target.value)}
+                          />
+                        </>
+                      )}
+                      {p === "x" && (
+                        <>
+                          <SettingRow label={t("settings.xReplySettings")}>
+                            <div className="w-36">
+                              <select
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                value={String((settings?.task?.publish?.platforms?.x?.extra as Record<string, string>)?.reply_settings ?? "everyone")}
+                                onChange={(e) => onChange("task.publish.platforms.x.extra.reply_settings", e.target.value)}
+                              >
+                                {["everyone", "followers", "mentioned_users"].map((v) => <option key={v} value={v}>{v}</option>)}
+                              </select>
+                            </div>
+                          </SettingRow>
+                          <SettingRow label={t("settings.xIsSensitive")}>
+                            <Switch
+                              checked={(settings?.task?.publish?.platforms?.x?.extra as Record<string, boolean>)?.is_sensitive ?? false}
+                              onCheckedChange={(v) => onChange("task.publish.platforms.x.extra.is_sensitive", v)}
+                            />
+                          </SettingRow>
+                          <LabelInput
+                            label={t("settings.xHashtags")}
+                            value={String((settings?.task?.publish?.platforms?.x?.extra as Record<string, string>)?.hashtags ?? "")}
+                            onChange={(e) => onChange("task.publish.platforms.x.extra.hashtags", e.target.value)}
+                          />
+                        </>
+                      )}
                     </TabsContent>
                   ))}
                 </Tabs>
