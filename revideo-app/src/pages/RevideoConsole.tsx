@@ -535,6 +535,19 @@ export default function RevideoConsole({
     saveTimerRef.current = setTimeout(() => {
       const form = formRef.current;
       if (!form) return;
+      // 先收集 number 类型字段名，用于类型转换和空值过滤
+      const numberFields = new Set<string>();
+      const elements = form.elements;
+      for (let i = 0; i < elements.length; i++) {
+        const el = elements[i];
+        if (
+          el instanceof HTMLInputElement &&
+          el.type === "number" &&
+          el.name
+        ) {
+          numberFields.add(el.name);
+        }
+      }
       const data = new FormData(form);
       const partial: Record<string, unknown> = {};
       data.forEach((v, k) => {
@@ -543,13 +556,22 @@ export default function RevideoConsole({
           k.startsWith("task.") ||
           k.startsWith("agent.")
         ) {
+          // number 字段：空字符串跳过（保留磁盘原值），否则 Number() 转换
+          let value: unknown = v;
+          if (numberFields.has(k)) {
+            const s = String(v).trim();
+            if (s === "") return; // 空值不发送，避免 merge_json 用 "" 覆盖磁盘值
+            const n = Number(s);
+            if (Number.isNaN(n)) return; // 非法数字不发送
+            value = n;
+          }
           const keys = k.split(".");
           let cur: Record<string, unknown> = partial;
           for (let i = 0; i < keys.length - 1; i++) {
             if (!cur[keys[i]]) cur[keys[i]] = {};
             cur = cur[keys[i]] as Record<string, unknown>;
           }
-          cur[keys[keys.length - 1]] = v;
+          cur[keys[keys.length - 1]] = value;
         }
       });
       invoke("update_settings", { partial }).catch((e) =>

@@ -6,23 +6,36 @@ mod state;
 use state::AppState;
 use std::path::PathBuf;
 use tracing::info;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "revideo=info,tauri=warn".into()),
-        )
+    // ── Tracing 初始化：同时写 stderr + 滚动日志文件 ──
+    let paths = revideo_core::AppPaths::resolve();
+    let log_dir = paths.data_dir.join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "revideo.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            "revideo=info,tauri=warn".into()
+        }))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(tracing_subscriber::fmt::layer().with_writer(non_blocking))
         .init();
 
     info!("Revideo App starting...");
+    info!("Logs writing to {}", log_dir.display());
 
     // Init state BEFORE Tauri builder
     let sidecar_dir = find_sidecar_dir();
     AppState::init(sidecar_dir).await;
 
-    // Launch Tauri
+    // Launch Tauri.
+    // `guard` 必须保活到进程退出，否则 non-blocking writer 会在 drop 时丢弃
+    // 未刷新的日志。tauri::Builder::run() 是阻塞调用，进程退出前 guard 都在。
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::list_jobs,
@@ -59,6 +72,9 @@ async fn main() {
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("Failed to launch Revideo");
+
+    // 显式 drop guard，确保退出前日志刷新
+    drop(guard);
 }
 
 fn find_sidecar_dir() -> PathBuf {
