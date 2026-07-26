@@ -144,12 +144,15 @@ impl OpenAiClient {
             }),
             // json_object mode is supported by all OpenAI-compatible APIs
             // without requiring a separate json_schema field.
-            max_tokens: Some(4096),
+            // 不设 max_tokens — 硬限制会导致大批次翻译被截断，JSON 不完整
+            max_tokens: None,
         };
 
         let raw = self.send(request).await?;
         debug!("Raw JSON response: {raw}");
-        serde_json::from_str(&raw).map_err(|e| {
+        // 容错提取：模型可能返回带 markdown fence 或额外文本的 JSON
+        let json_str = extract_json(&raw);
+        serde_json::from_str(&json_str).map_err(|e| {
             ClientError::InvalidResponse(format!("Failed to parse structured response: {e}"))
         })
     }
@@ -234,4 +237,34 @@ impl OpenAiClient {
             .and_then(|c| c.message.content)
             .ok_or_else(|| ClientError::InvalidResponse("No content in response".into()))
     }
+}
+
+/// 从可能包含 markdown fence 或额外文本的响应中提取 JSON。
+/// 移植自 Dashboard 的 `extractJsonPayload`。
+fn extract_json(raw: &str) -> String {
+    let stripped = raw.trim();
+    // 去 markdown code fence (```json ... ``` 或 ``` ... ```)
+    let after_prefix = stripped
+        .strip_prefix("```json")
+        .or_else(|| stripped.strip_prefix("```"))
+        .unwrap_or(stripped);
+    let stripped = after_prefix.strip_suffix("```").unwrap_or(after_prefix).trim();
+
+    // 如果直接以 { 或 [ 开头，直接返回
+    if stripped.starts_with('{') || stripped.starts_with('[') {
+        return stripped.to_string();
+    }
+    // 否则尝试从文本中提取第一个 { 到最后一个 }（对象）
+    if let (Some(start), Some(end)) = (stripped.find('{'), stripped.rfind('}')) {
+        if end > start {
+            return stripped[start..=end].to_string();
+        }
+    }
+    // 或第一个 [ 到最后一个 ]（数组）
+    if let (Some(start), Some(end)) = (stripped.find('['), stripped.rfind(']')) {
+        if end > start {
+            return stripped[start..=end].to_string();
+        }
+    }
+    stripped.to_string()
 }
